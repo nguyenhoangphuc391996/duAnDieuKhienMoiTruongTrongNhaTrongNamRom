@@ -1,0 +1,304 @@
+/*
+ * rtrecd.c
+ *
+ *  Created on: 16 thg 3, 2026
+ *      Author: embedded
+ */
+
+#include "rtrecd.h"
+
+static bool rtrecd_pin_is_active(const rtrecd_gpio_t *gpio, bool active_low)
+{
+	GPIO_PinState raw_state;
+
+	if ((gpio == NULL) || (gpio->port == NULL))
+	{
+		return false;
+	}
+
+	raw_state = HAL_GPIO_ReadPin(gpio->port, gpio->pin);
+	if (active_low)
+	{
+		return (raw_state == GPIO_PIN_RESET);
+	}
+
+	return (raw_state == GPIO_PIN_SET);
+}
+
+static uint8_t rtrecd_read_ab_state(const rtrecd_t *h)
+{
+	uint8_t a;
+	uint8_t b;
+
+	a = rtrecd_pin_is_active(&h->pin_a, h->ab_active_low) ? 1U : 0U;
+	b = rtrecd_pin_is_active(&h->pin_b, h->ab_active_low) ? 1U : 0U;
+
+	return (uint8_t)((a << 1U) | b);
+}
+
+static void rtrecd_update_rotation_from_isr(rtrecd_t *h)
+{
+	static const int8_t transition_table[16] =
+	{
+		0, -1,  1,  0,
+		1,  0,  0, -1,
+		-1, 0,  0,  1,
+		0,  1, -1,  0
+	};
+	uint8_t curr_state;
+	uint8_t index;
+	int8_t step;
+	uint8_t steps_per_detent;
+
+	curr_state = rtrecd_read_ab_state(h);
+	index = (uint8_t)((h->prev_ab_state << 2U) | curr_state);
+	step = transition_table[index];
+	h->prev_ab_state = curr_state;
+
+	if (step == 0)
+	{
+		return;
+	}
+
+	steps_per_detent = (h->steps_per_detent == 0U) ? RTRECD_DEFAULT_STEPS_PER_DETENT : h->steps_per_detent;
+
+	/* Discard partial steps when direction flips to avoid reverse-direction lag. */
+	if (((h->step_acc > 0) && (step < 0)) || ((h->step_acc < 0) && (step > 0)))
+	{
+		h->step_acc = 0;
+	}
+
+	h->step_acc += step;
+	while (h->step_acc >= (int8_t)steps_per_detent)
+	{
+		h->rot_cw_pending += 1U;
+		h->step_acc -= (int8_t)steps_per_detent;
+	}
+	while (h->step_acc <= -(int8_t)steps_per_detent)
+	{
+		h->rot_ccw_pending += 1U;
+		h->step_acc += (int8_t)steps_per_detent;
+	}
+}
+
+bool rtrecd_init(rtrecd_t *h)
+{
+	uint32_t now_ms;
+	bool sw_active;
+	bool use_default_active_level;
+
+	if ((h == NULL) || (h->pin_a.port == NULL) || (h->pin_b.port == NULL) || (h->pin_sw.port == NULL))
+	{
+		return false;
+	}
+
+	h->initialized = false;
+
+	if (h->get_tick_ms == NULL)
+	{
+		h->get_tick_ms = HAL_GetTick;
+	}
+
+	if (h->debounce_ms == 0U)
+	{
+		h->debounce_ms = RTRECD_DEFAULT_DEBOUNCE_MS;
+	}
+
+	if (h->long_press_ms == 0U)
+	{
+		h->long_press_ms = RTRECD_DEFAULT_LONG_PRESS_MS;
+	}
+
+	if (h->steps_per_detent == 0U)
+	{
+		h->steps_per_detent = RTRECD_DEFAULT_STEPS_PER_DETENT;
+	}
+
+	use_default_active_level = h->use_default_active_level;
+	if ((h->ab_active_low == false) && (h->sw_active_low == false))
+	{
+		use_default_active_level = true;
+	}
+	if (use_default_active_level)
+	{
+		h->ab_active_low = true;
+		h->sw_active_low = true;
+	}
+
+	h->step_acc = 0;
+	h->prev_ab_state = rtrecd_read_ab_state(h);
+	h->rot_cw_pending = 0U;
+	h->rot_ccw_pending = 0U;
+
+	now_ms = h->get_tick_ms();
+	sw_active = rtrecd_pin_is_active(&h->pin_sw, h->sw_active_low);
+
+	h->btn_raw_state = sw_active;
+	h->btn_stable_state = sw_active;
+	h->btn_pressing = sw_active;
+	h->btn_long_reported = false;
+	h->btn_last_bounce_ms = now_ms;
+	h->btn_press_start_ms = now_ms;
+	h->initialized = true;
+
+	return true;
+}
+
+void rtrecd_isr_a(rtrecd_t *h)
+{
+	if ((h == NULL) || (h->initialized == false))
+	{
+		return;
+	}
+
+	rtrecd_update_rotation_from_isr(h);
+}
+
+void rtrecd_isr_b(rtrecd_t *h)
+{
+	if ((h == NULL) || (h->initialized == false))
+	{
+		return;
+	}
+
+	rtrecd_update_rotation_from_isr(h);
+}
+
+void rtrecd_isr_ab(rtrecd_t *h)
+{
+	if ((h == NULL) || (h->initialized == false))
+	{
+		return;
+	}
+
+	rtrecd_update_rotation_from_isr(h);
+}
+
+bool rtrecd_is_button_pressed(const rtrecd_t *h)
+{
+	if ((h == NULL) || (h->initialized == false))
+	{
+		return false;
+	}
+
+	return h->btn_stable_state;
+}
+
+const char *rtrecd_event_to_str(rtrecd_event_t event)
+{
+	switch (event)
+	{
+	case RTRECD_EVENT_NONE:
+		return "NONE";
+	case RTRECD_EVENT_ROTATE_CW:
+		return "ROTATE_CW";
+	case RTRECD_EVENT_ROTATE_CCW:
+		return "ROTATE_CCW";
+	case RTRECD_EVENT_BUTTON_SHORT:
+		return "BUTTON_SHORT";
+	case RTRECD_EVENT_BUTTON_LONG:
+		return "BUTTON_LONG";
+	default:
+		return "UNKNOWN";
+	}
+}
+
+rtrecd_event_t rtrecd_process(rtrecd_t *h)
+{
+	rtrecd_event_t out;
+	uint32_t now_ms;
+	bool sw_active;
+	rtrecd_event_t button_event;
+	uint32_t primask;
+	uint8_t has_cw;
+	uint8_t has_ccw;
+
+	out = RTRECD_EVENT_NONE;
+	button_event = RTRECD_EVENT_NONE;
+
+	if ((h == NULL) || (h->get_tick_ms == NULL))
+	{
+		return out;
+	}
+
+	if (h->initialized == false)
+	{
+		return out;
+	}
+
+	/* Atomically fetch one pending rotation event produced in ISR context. */
+	primask = __get_PRIMASK();
+	__disable_irq();
+	has_cw = h->rot_cw_pending;
+	has_ccw = h->rot_ccw_pending;
+	if (has_cw > 0U)
+	{
+		h->rot_cw_pending = (uint8_t)(has_cw - 1U);
+	}
+	else if (has_ccw > 0U)
+	{
+		h->rot_ccw_pending = (uint8_t)(has_ccw - 1U);
+	}
+	if (primask == 0U)
+	{
+		__enable_irq();
+	}
+
+	if (has_cw > 0U)
+	{
+		out = RTRECD_EVENT_ROTATE_CW;
+	}
+	else if (has_ccw > 0U)
+	{
+		out = RTRECD_EVENT_ROTATE_CCW;
+	}
+
+	now_ms = h->get_tick_ms();
+	sw_active = rtrecd_pin_is_active(&h->pin_sw, h->sw_active_low);
+
+	if (sw_active != h->btn_raw_state)
+	{
+		h->btn_raw_state = sw_active;
+		h->btn_last_bounce_ms = now_ms;
+	}
+
+	if ((uint32_t)(now_ms - h->btn_last_bounce_ms) >= h->debounce_ms)
+	{
+		if (h->btn_stable_state != h->btn_raw_state)
+		{
+			h->btn_stable_state = h->btn_raw_state;
+
+			if (h->btn_stable_state)
+			{
+				h->btn_pressing = true;
+				h->btn_long_reported = false;
+				h->btn_press_start_ms = now_ms;
+			}
+			else if (h->btn_pressing)
+			{
+				h->btn_pressing = false;
+				if (h->btn_long_reported == false)
+				{
+					button_event = RTRECD_EVENT_BUTTON_SHORT;
+				}
+			}
+		}
+	}
+
+	if ((h->btn_pressing == true) && (h->btn_stable_state == true) && (h->btn_long_reported == false))
+	{
+		if ((uint32_t)(now_ms - h->btn_press_start_ms) >= h->long_press_ms)
+		{
+			h->btn_long_reported = true;
+			button_event = RTRECD_EVENT_BUTTON_LONG;
+		}
+	}
+
+	/* Prioritize button events so they are not masked by rotation in the same cycle. */
+	if (button_event != RTRECD_EVENT_NONE)
+	{
+		out = button_event;
+	}
+
+	return out;
+}
