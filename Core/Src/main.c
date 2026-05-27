@@ -25,8 +25,8 @@
 #include "itm.h"
 #include "rtrecd.h"
 #include "lcd.h"
-#include "scd4x_i2c.h"
-#include "scd41_print.h"
+
+
 
 #undef Error_Handler
 /* USER CODE END Includes */
@@ -47,7 +47,6 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
 I2C_HandleTypeDef hi2c2;
 
 /* Definitions for TaskInput */
@@ -76,20 +75,10 @@ osMessageQueueId_t QueueEC11Handle;
 const osMessageQueueAttr_t QueueEC11_attributes = {
   .name = "QueueEC11"
 };
-/* Definitions for QueueScd41 */
-osMessageQueueId_t QueueScd41Handle;
-const osMessageQueueAttr_t QueueScd41_attributes = {
-  .name = "QueueScd41"
-};
 /* Definitions for MutexI2C2 */
 osMutexId_t MutexI2C2Handle;
 const osMutexAttr_t MutexI2C2_attributes = {
   .name = "MutexI2C2"
-};
-/* Definitions for MutexI2C1 */
-osMutexId_t MutexI2C1Handle;
-const osMutexAttr_t MutexI2C1_attributes = {
-  .name = "MutexI2C1"
 };
 /* USER CODE BEGIN PV */
 
@@ -106,7 +95,6 @@ uint32_t ramduinput, ramduui, ramdulcd;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C2_Init(void);
-static void MX_I2C1_Init(void);
 void StartTaskInput(void *argument);
 void StartTaskUI(void *argument);
 void StartTaskLCD(void *argument);
@@ -150,7 +138,6 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C2_Init();
-  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -160,9 +147,6 @@ int main(void)
   /* Create the mutex(es) */
   /* creation of MutexI2C2 */
   MutexI2C2Handle = osMutexNew(&MutexI2C2_attributes);
-
-  /* creation of MutexI2C1 */
-  MutexI2C1Handle = osMutexNew(&MutexI2C1_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -178,10 +162,7 @@ int main(void)
 
   /* Create the queue(s) */
   /* creation of QueueEC11 */
-  QueueEC11Handle = osMessageQueueNew (16, sizeof(uint16_t), &QueueEC11_attributes);
-
-  /* creation of QueueScd41 */
-  QueueScd41Handle = osMessageQueueNew (16, sizeof(scd41_queue_item_t), &QueueScd41_attributes);
+  QueueEC11Handle = osMessageQueueNew (16, sizeof(rtrecd_queue_item_t), &QueueEC11_attributes);
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
@@ -255,40 +236,6 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-}
-
-/**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C1_Init(void)
-{
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2C1_Init 2 */
-
-  /* USER CODE END I2C1_Init 2 */
-
 }
 
 /**
@@ -386,34 +333,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 void StartTaskInput(void *argument)
 {
   /* USER CODE BEGIN 5 */
-	scd41_config_t scd41_config = {0};
-	scd41_context_t scd41_context = {0};
-
-	  scd41_config.i2c_handle = &hi2c1;
-	  scd41_config.i2c_mutex = MutexI2C1Handle;
-	  scd4x_runtime_init(&scd41_config, &scd41_context);
-	  scd4x_runtime_start_periodic_measurement(&scd41_config, &scd41_context);
-
 	if (rtrecd_init(&g_rtrecd) == false)
 		  {
 		    Error_Handler();
 		  }
-	rtrecd_event_t input_data;
   /* Infinite loop */
   for(;;)
   {
-	  Scd41Api_Service(&scd41_config,
-	                   &scd41_context,
-					   QueueScd41Handle,
-	                   scd4x_runtime_default_itm_event_handler);
-
-
-	  input_data = rtrecd_process(&g_rtrecd);
-	 if (input_data != RTRECD_EVENT_NONE)
-	 {
-		 (void)osMessageQueuePut(QueueEC11Handle, &input_data, 0U, 0U);
-	 }
-
+	  rtrecd_service(&g_rtrecd, QueueEC11Handle);
 	  osDelay(2);
 	  ramduinput = uxTaskGetStackHighWaterMark(NULL);
   }
@@ -430,14 +357,11 @@ void StartTaskInput(void *argument)
 void StartTaskUI(void *argument)
 {
   /* USER CODE BEGIN StartTaskUI */
-	rtrecd_event_t ev;
-	scd41_queue_item_t measurement = {0};
-    bool did_work;
+	rtrecd_queue_item_t ev;
   /* Infinite loop */
   for(;;)
   {
-	  did_work = false;
-	  if (osMessageQueueGet(QueueEC11Handle, &ev, NULL, 0U) == osOK)
+	  if (osMessageQueueGet(QueueEC11Handle, &ev, NULL, osWaitForever ) == osOK)
 	      {
 	        const char *label;
 	        switch (ev)
@@ -464,23 +388,8 @@ void StartTaskUI(void *argument)
 	        itm_print("QueueInput event: ");
 	        itm_print(label);
 	        itm_print("\r\n");
-	        did_work = true;
-	      }
-	  if (osMessageQueueGet(QueueScd41Handle,
-	                        &measurement,
-	                        NULL,
-	                        0U) == osOK)
-	      {
-	        scd41_print_scd41_measurement(measurement.co2,
-	                                      measurement.temperature_m_deg_c,
-	                                      measurement.humidity_m_percent_rh);
-	        did_work = true;
 	      }
 
-	  if (!did_work)
-	  {
-	    osDelay(1);
-	  }
 	  ramduui = uxTaskGetStackHighWaterMark(NULL);
    }
   /* USER CODE END StartTaskUI */
@@ -503,17 +412,13 @@ void StartTaskLCD(void *argument)
 	};
 
     itm_print("[LCD] init...\r\n");
-    if (lcd_init(&lcd_cfg) != HAL_OK)
-    {
-      itm_print("[LCD][ERR] lcd_init FAILED - check I2C2 wiring and address 0x27\r\n");
-      osThreadExit();
-    }
+    lcd_init(&lcd_cfg);
     itm_print("[LCD] init OK\r\n");
   /* Infinite loop */
   for(;;)
   {
 	  lcd_clear();
-	  osDelay(1000);
+	  osDelay(2000);
 	  lcd_put_cur(0, 0);
 	  lcd_send_string("LCD init OK");
 	  lcd_put_cur(1, 0);

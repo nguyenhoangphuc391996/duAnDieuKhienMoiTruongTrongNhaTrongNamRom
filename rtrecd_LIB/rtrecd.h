@@ -15,6 +15,7 @@ extern "C" {
 #include <stdbool.h>
 #include <stdint.h>
 #include "stm32f1xx_hal.h"
+#include "cmsis_os.h"
 
 /**
  * @file rtrecd.h
@@ -24,7 +25,7 @@ extern "C" {
  * - Khai báo và cấu hình một biến @ref rtrecd_t.
  * - Gọi @ref rtrecd_init trong lúc khởi tạo hệ thống.
  * - Gọi @ref rtrecd_isr_a, @ref rtrecd_isr_b hoặc @ref rtrecd_isr_ab trong callback EXTI.
- * - Gọi @ref rtrecd_process theo chu kỳ trong task để lấy @ref rtrecd_event_t.
+ * - Gọi @ref rtrecd_process theo chu kỳ trong task để lấy @ref rtrecd_queue_item_t.
  *
  * Thư viện:
  * - Giải mã quadrature A/B bằng ngắt GPIO.
@@ -70,7 +71,7 @@ typedef enum
 	RTRECD_EVENT_ROTATE_CCW,   /**< Xoay ngược chiều kim đồng hồ. */
 	RTRECD_EVENT_BUTTON_SHORT, /**< Nút được nhấn ngắn. */
 	RTRECD_EVENT_BUTTON_LONG   /**< Nút được nhấn dài. */
-} rtrecd_event_t;
+} rtrecd_queue_item_t;
 
 /**
  * @brief Handle quản lý một encoder.
@@ -157,7 +158,7 @@ void rtrecd_isr_ab(rtrecd_t *h);
  *
  * @note Hàm này không chặn và không dùng HAL_Delay().
  */
-rtrecd_event_t rtrecd_process(rtrecd_t *h);
+rtrecd_queue_item_t rtrecd_process(rtrecd_t *h);
 
 /**
  * @brief Lấy trạng thái ổn định hiện tại của nút nhấn.
@@ -173,7 +174,19 @@ bool rtrecd_is_button_pressed(const rtrecd_t *h);
  * @param event Mã event cần chuyển.
  * @return Chuỗi hằng tương ứng với event.
  */
-const char *rtrecd_event_to_str(rtrecd_event_t event);
+const char *rtrecd_queue_item_to_str(rtrecd_queue_item_t event);
+
+/**
+ * @brief Hàm service định kỳ cho encoder: xử lý và đẩy event vào queue.
+ *
+ * Gọi hàm này theo chu kỳ trong task input. Nếu có event mới (khác
+ * RTRECD_EVENT_NONE) thì tự động gọi osMessageQueuePut vào queue.
+ *
+ * @param h     Con trỏ tới handle encoder.
+ * @param queue Handle của osMessageQueue nhận rtrecd_queue_item_t.
+ * @return true nếu có event được đẩy vào queue, false nếu không có gì.
+ */
+bool rtrecd_service(rtrecd_t *h, osMessageQueueId_t queue);
 
 #ifdef __cplusplus
 }

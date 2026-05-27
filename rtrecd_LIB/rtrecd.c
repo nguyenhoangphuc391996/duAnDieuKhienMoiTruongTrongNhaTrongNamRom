@@ -6,6 +6,7 @@
  */
 
 #include "rtrecd.h"
+#include "cmsis_os.h"
 
 static bool rtrecd_pin_is_active(const rtrecd_gpio_t *gpio, bool active_low)
 {
@@ -184,7 +185,7 @@ bool rtrecd_is_button_pressed(const rtrecd_t *h)
 	return h->btn_stable_state;
 }
 
-const char *rtrecd_event_to_str(rtrecd_event_t event)
+const char *rtrecd_queue_item_to_str(rtrecd_queue_item_t event)
 {
 	switch (event)
 	{
@@ -203,12 +204,12 @@ const char *rtrecd_event_to_str(rtrecd_event_t event)
 	}
 }
 
-rtrecd_event_t rtrecd_process(rtrecd_t *h)
+rtrecd_queue_item_t rtrecd_process(rtrecd_t *h)
 {
-	rtrecd_event_t out;
+	rtrecd_queue_item_t out;
 	uint32_t now_ms;
 	bool sw_active;
-	rtrecd_event_t button_event;
+	rtrecd_queue_item_t button_event;
 	uint32_t primask;
 	uint8_t has_cw;
 	uint8_t has_ccw;
@@ -301,4 +302,15 @@ rtrecd_event_t rtrecd_process(rtrecd_t *h)
 	}
 
 	return out;
+}
+
+bool rtrecd_service(rtrecd_t *h, osMessageQueueId_t queue)
+{
+	rtrecd_queue_item_t event = rtrecd_process(h);
+	if (event != RTRECD_EVENT_NONE)
+	{
+		(void)osMessageQueuePut(queue, &event, 0U, 0U);
+		return true;
+	}
+	return false;
 }
