@@ -99,6 +99,7 @@ typedef enum {
     SCD4X_RUNTIME_FAULT_BUS,
     SCD4X_RUNTIME_FAULT_CRC,
     SCD4X_RUNTIME_FAULT_BUSY,
+    SCD4X_RUNTIME_FAULT_RTOS,    /**< Loi RTOS noi bo: mutex/heap that bai, khong lien quan den sensor. */
     SCD4X_RUNTIME_FAULT_UNKNOWN,
 } scd4x_runtime_fault_cause_t;
 

@@ -64,20 +64,9 @@ typedef struct {
 
 static bool g_scd4x_itm_short_log_enabled = true;
 static scd4x_itm_fault_log_state_t g_scd4x_itm_fault_log_state = {0};
-static osMutexId_t g_scd4x_runtime_hal_guard = NULL;
-
-static int16_t scd4x_runtime_ensure_hal_guard(void) {
-    if (g_scd4x_runtime_hal_guard != NULL) {
-        return NO_ERROR;
-    }
-
-    if (osKernelGetState() == osKernelInactive) {
-        return NOT_IMPLEMENTED_ERROR;
-    }
-
-    g_scd4x_runtime_hal_guard = osMutexNew(NULL);
-    return (g_scd4x_runtime_hal_guard != NULL) ? NO_ERROR : NOT_IMPLEMENTED_ERROR;
-}
+/* Guard mutex da bi xoa bo — chi dung config->i2c_mutex (MutexI2C1Handle) de serialize.
+ * Thiet ke guard chi can thiet khi co nhieu SCD41 instance tren nhieu task khac nhau.
+ * Du an nay: 1 instance, 1 task → MutexI2C1 la du. */
 
 static int16_t scd4x_runtime_lock(const scd41_config_t* config) {
     if ((config == NULL) || (config->i2c_mutex == NULL)) {
@@ -88,24 +77,10 @@ static int16_t scd4x_runtime_lock(const scd41_config_t* config) {
         return NOT_IMPLEMENTED_ERROR;
     }
 
-    if (scd4x_runtime_ensure_hal_guard() != NO_ERROR) {
-        (void)osMutexRelease(config->i2c_mutex);
-        return NOT_IMPLEMENTED_ERROR;
-    }
-
-    if (osMutexAcquire(g_scd4x_runtime_hal_guard, osWaitForever) != osOK) {
-        (void)osMutexRelease(config->i2c_mutex);
-        return NOT_IMPLEMENTED_ERROR;
-    }
-
     return NO_ERROR;
 }
 
 static void scd4x_runtime_unlock(const scd41_config_t* config) {
-    if (g_scd4x_runtime_hal_guard != NULL) {
-        (void)osMutexRelease(g_scd4x_runtime_hal_guard);
-    }
-
     if ((config != NULL) && (config->i2c_mutex != NULL)) {
         (void)osMutexRelease(config->i2c_mutex);
     }
@@ -131,6 +106,11 @@ static scd4x_runtime_fault_cause_t scd4x_runtime_classify_fault(
 
     if (error == NO_ERROR) {
         return SCD4X_RUNTIME_FAULT_NONE;
+    }
+
+    /* NOT_IMPLEMENTED_ERROR (31) = loi RTOS noi bo (mutex/heap), KHONG phai loi I2C. */
+    if (error == (int16_t)NOT_IMPLEMENTED_ERROR) {
+        return SCD4X_RUNTIME_FAULT_RTOS;
     }
 
     if ((error == (int16_t)HAL_TIMEOUT) || ((hal_error & HAL_I2C_ERROR_TIMEOUT) != 0U)) {
@@ -183,7 +163,8 @@ static const char* scd4x_runtime_fault_cause_to_text(
             return "CRC_ERROR";
         case SCD4X_RUNTIME_FAULT_BUSY:
             return "BUSY";
-        default:
+        case SCD4X_RUNTIME_FAULT_RTOS:
+            return "RTOS_ERROR";        default:
             return "UNKNOWN";
     }
 }
@@ -300,6 +281,8 @@ static const char* scd4x_runtime_fault_hint(scd4x_runtime_fault_cause_t cause) {
             return "data corrupted, check cable/noise";
         case SCD4X_RUNTIME_FAULT_BUSY:
             return "bus busy, check shared bus access";
+        case SCD4X_RUNTIME_FAULT_RTOS:
+            return "check i2c_mutex is set in scd41_config and RTOS is running";
         default:
             return "check sensor connection";
     }
@@ -334,6 +317,8 @@ static const char* scd4x_runtime_fault_simple_text(
             return "du lieu loi (CRC), giao tiep khong on dinh";
         case SCD4X_RUNTIME_FAULT_BUSY:
             return "bus dang ban";
+        case SCD4X_RUNTIME_FAULT_RTOS:
+            return "loi RTOS: i2c_mutex chua duoc gan hoac acquire that bai";
         default:
             return "mat ket noi sensor";
     }
@@ -389,7 +374,7 @@ void scd4x_runtime_default_itm_event_handler(const scd41_config_t* config,
                 itm_print(scd4x_runtime_bus_to_text(config));
                 itm_print(": ");
                 itm_print(scd4x_runtime_fault_simple_text(context->fault_cause));
-                itm_print(". Kiem tra day SDA/SCL va nguon sensor.\r\n");
+                itm_print(".\r\n");
                 break;
             }
 
