@@ -56,28 +56,28 @@ UART_HandleTypeDef huart1;
 osThreadId_t TaskInputHandle;
 const osThreadAttr_t TaskInput_attributes = {
   .name = "TaskInput",
-  .stack_size = 128 * 4,
+  .stack_size = 500 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskUI */
 osThreadId_t TaskUIHandle;
 const osThreadAttr_t TaskUI_attributes = {
   .name = "TaskUI",
-  .stack_size = 128 * 4,
+  .stack_size = 500 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskLCD */
 osThreadId_t TaskLCDHandle;
 const osThreadAttr_t TaskLCD_attributes = {
   .name = "TaskLCD",
-  .stack_size = 128 * 4,
+  .stack_size = 300 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskDS18B20 */
 osThreadId_t TaskDS18B20Handle;
 const osThreadAttr_t TaskDS18B20_attributes = {
   .name = "TaskDS18B20",
-  .stack_size = 180 * 4,
+  .stack_size = 300 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal7,
 };
 /* Definitions for QueueEC11 */
