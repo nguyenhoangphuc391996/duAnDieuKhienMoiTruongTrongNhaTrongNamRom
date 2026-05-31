@@ -27,6 +27,7 @@
 #include "lcd.h"
 #include "scd4x_i2c.h"
 #include "ds18b20_app.h"
+#include "app_menu.h"
 
 #undef Error_Handler
 /* USER CODE END Includes */
@@ -105,6 +106,11 @@ osMutexId_t MutexSCD41Handle;
 const osMutexAttr_t MutexSCD41_attributes = {
   .name = "MutexSCD41"
 };
+/* Definitions for MutexMenu */
+osMutexId_t MutexMenuHandle;
+const osMutexAttr_t MutexMenu_attributes = {
+  .name = "MutexMenu"
+};
 /* USER CODE BEGIN PV */
 
 static rtrecd_t g_rtrecd = {
@@ -112,6 +118,11 @@ static rtrecd_t g_rtrecd = {
   .pin_b = {GPIOB, GPIO_PIN_13},
   .pin_sw = {GPIOB, GPIO_PIN_14}
 };
+
+/* Menu context - shared between TaskUI (writer) and TaskLCD (reader/renderer) */
+static app_menu_ctx_t g_menu_ctx;
+osMutexId_t MutexMenuHandle;
+
 
 uint32_t ramduinput, ramduui, ramdulcd, ramduds18b20;
 uint32_t free_heap __attribute__((unused));
@@ -182,8 +193,11 @@ int main(void)
   /* creation of MutexSCD41 */
   MutexSCD41Handle = osMutexNew(&MutexSCD41_attributes);
 
+  /* creation of MutexMenu */
+  MutexMenuHandle = osMutexNew(&MutexMenu_attributes);
+
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
+  MutexMenuHandle = osMutexNew(&MutexMenu_attributes);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -514,26 +528,43 @@ void StartTaskUI(void *argument)
   {
 	  got_event = false;
 
+	  /* EC11 encoder -> menu navigation */
 	  if (osMessageQueueGet(QueueEC11Handle, &ev, NULL, 0U) == osOK)
 	  {
-		  const char *label = rtrecd_queue_item_to_str(ev);
-		  itm_print("QueueInput event: ");
-		  itm_print(label);
+		  itm_print("EC11: ");
+		  itm_print(rtrecd_queue_item_to_str(ev));
 		  itm_print("\r\n");
+
+		  osMutexAcquire(MutexMenuHandle, osWaitForever);
+		  app_menu_handle_event(&g_menu_ctx, ev);
+		  osMutexRelease(MutexMenuHandle);
+
 		  got_event = true;
 	  }
 
+	  /* SCD41 data -> menu sensor update + ITM log */
 	  if (osMessageQueueGet(QueueSCD41Handle, &scd41_data, NULL, 0U) == osOK)
 	  {
 		  scd41_print_scd41_measurement(scd41_data.co2,
 				  scd41_data.temperature_m_deg_c,
 				  scd41_data.humidity_m_percent_rh);
+
+		  osMutexAcquire(MutexMenuHandle, osWaitForever);
+		  app_menu_update_scd41(&g_menu_ctx, &scd41_data);
+		  osMutexRelease(MutexMenuHandle);
+
 		  got_event = true;
 	  }
 
+	  /* DS18B20 data -> menu sensor update + ITM log */
 	  if (osMessageQueueGet(QueueDS18B20Handle, &ds18b20_data, NULL, 0U) == osOK)
 	  {
 		  Ds18b20Api_PrintItem(&ds18b20_data);
+
+		  osMutexAcquire(MutexMenuHandle, osWaitForever);
+		  app_menu_update_ds18b20(&g_menu_ctx, &ds18b20_data);
+		  osMutexRelease(MutexMenuHandle);
+
 		  got_event = true;
 	  }
 
@@ -568,18 +599,21 @@ void StartTaskLCD(void *argument)
     itm_print("[LCD] init...\r\n");
     lcd_init(&lcd_cfg);
     itm_print("[LCD] init OK\r\n");
+
+    /* Khởi tạo menu sau khi LCD đã sẵn sàng */
+    osMutexAcquire(MutexMenuHandle, osWaitForever);
+    app_menu_init(&g_menu_ctx);
+    osMutexRelease(MutexMenuHandle);
+
   /* Infinite loop */
   for(;;)
   {
-	  lcd_clear();
-	  osDelay(2000);
-	  lcd_put_cur(0, 0);
-	  lcd_send_string("LCD init OK");
-	  lcd_put_cur(1, 0);
-	  lcd_send_string("LCD_V4 Test");
-	  ramdulcd = uxTaskGetStackHighWaterMark(NULL);
-	  osDelay(2000);
+	  osMutexAcquire(MutexMenuHandle, osWaitForever);
+	  app_menu_render(&g_menu_ctx);
+	  osMutexRelease(MutexMenuHandle);
 
+	  ramdulcd = uxTaskGetStackHighWaterMark(NULL);
+	  osDelay(50);
   }
   /* USER CODE END StartTaskLCD */
 }
