@@ -51,6 +51,8 @@
 I2C_HandleTypeDef hi2c1;
 I2C_HandleTypeDef hi2c2;
 
+RTC_HandleTypeDef hrtc;
+
 UART_HandleTypeDef huart1;
 
 /* Definitions for TaskInput */
@@ -121,8 +123,6 @@ static rtrecd_t g_rtrecd = {
 
 /* Menu context - shared between TaskUI (writer) and TaskLCD (reader/renderer) */
 static app_menu_ctx_t g_menu_ctx;
-osMutexId_t MutexMenuHandle;
-
 
 uint32_t ramduinput, ramduui, ramdulcd, ramduds18b20;
 uint32_t free_heap __attribute__((unused));
@@ -134,6 +134,7 @@ static void MX_GPIO_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_RTC_Init(void);
 void StartTaskInput(void *argument);
 void StartTaskUI(void *argument);
 void StartTaskLCD(void *argument);
@@ -180,6 +181,7 @@ int main(void)
   MX_I2C2_Init();
   MX_I2C1_Init();
   MX_USART1_UART_Init();
+  MX_RTC_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -197,7 +199,7 @@ int main(void)
   MutexMenuHandle = osMutexNew(&MutexMenu_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  MutexMenuHandle = osMutexNew(&MutexMenu_attributes);
+  /* MutexMenu đã được tạo bởi CubeMX ở trên */
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -268,11 +270,13 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSE;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
@@ -291,6 +295,12 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+  PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSE;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
   }
@@ -365,6 +375,89 @@ static void MX_I2C2_Init(void)
 }
 
 /**
+  * @brief RTC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_RTC_Init(void)
+{
+
+  /* USER CODE BEGIN RTC_Init 0 */
+
+  /* USER CODE END RTC_Init 0 */
+
+  RTC_TimeTypeDef sTime = {0};
+  RTC_DateTypeDef DateToUpdate = {0};
+
+  /* USER CODE BEGIN RTC_Init 1 */
+
+  /* USER CODE END RTC_Init 1 */
+
+  /** Initialize RTC Only
+  */
+  hrtc.Instance = RTC;
+  hrtc.Init.AsynchPrediv = RTC_AUTO_1_SECOND;
+  hrtc.Init.OutPut = RTC_OUTPUTSOURCE_ALARM;
+  if (HAL_RTC_Init(&hrtc) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* USER CODE BEGIN Check_RTC_BKUP */
+  /*
+   * Kiểm tra backup register DR1:
+   * - Nếu = 0xA5A5 → RTC đã được set từ trước (VBAT còn), bỏ qua SetTime/SetDate.
+   * - Nếu khác    → Lần đầu khởi động hoặc VBAT hết, cần set lại thời gian.
+   */
+  if (HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR1) == 0xA5A5U)
+  {
+      /*
+       * Khôi phục ngày từ BKP DR2/DR3 (lưu bởi app_menu_write_time_to_rtc)
+       * để phòng trường hợp debugger/reset xoá BKP ngày của HAL.
+       * DR2 [15:9]=year-2000  [8:5]=month  [4:0]=day
+       * DR3 = 0x5A5A (magic)
+       */
+      if (HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR3) == 0x5A5AU)
+      {
+          uint16_t d = (uint16_t)HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR2);
+          RTC_DateTypeDef sDateRestore = {0};
+          sDateRestore.Year    = (uint8_t)((d >> 9U) & 0x7FU);
+          sDateRestore.Month   = (uint8_t)((d >> 5U) & 0x0FU);
+          sDateRestore.Date    = (uint8_t)(d & 0x1FU);
+          sDateRestore.WeekDay = RTC_WEEKDAY_MONDAY;
+          HAL_RTC_SetDate(&hrtc, &sDateRestore, RTC_FORMAT_BIN);
+      }
+      return; /* Thời gian RTC vẫn còn, không cần reset */
+  }
+  /* USER CODE END Check_RTC_BKUP */
+
+  /** Initialize RTC and set the Time and Date
+  */
+  sTime.Hours = 0x0;
+  sTime.Minutes = 0x0;
+  sTime.Seconds = 0x0;
+
+  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  DateToUpdate.WeekDay = RTC_WEEKDAY_MONDAY;
+  DateToUpdate.Month = RTC_MONTH_JANUARY;
+  DateToUpdate.Date = 0x1;
+  DateToUpdate.Year = 0x0;
+
+  if (HAL_RTC_SetDate(&hrtc, &DateToUpdate, RTC_FORMAT_BCD) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN RTC_Init 2 */
+  /* Ghi magic number vào BKP DR1 để lần sau biết RTC đã được set */
+  HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, 0xA5A5U);
+  /* USER CODE END RTC_Init 2 */
+
+}
+
+/**
   * @brief USART1 Initialization Function
   * @param None
   * @retval None
@@ -410,6 +503,7 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
@@ -523,6 +617,9 @@ void StartTaskUI(void *argument)
 
 	bool got_event;
 
+	/* Đọc RTC mỗi 1 giây */
+	uint32_t rtc_last_tick = osKernelGetTickCount();
+
   /* Infinite loop */
   for(;;)
   {
@@ -537,6 +634,12 @@ void StartTaskUI(void *argument)
 
 		  osMutexAcquire(MutexMenuHandle, osWaitForever);
 		  app_menu_handle_event(&g_menu_ctx, ev);
+
+		  /* Nếu vừa lưu thời gian -> ghi ngay vào RTC */
+		  if (g_menu_ctx.time_rtc_dirty)
+		  {
+			  app_menu_write_time_to_rtc(&g_menu_ctx, &hrtc);
+		  }
 		  osMutexRelease(MutexMenuHandle);
 
 		  got_event = true;
@@ -565,6 +668,16 @@ void StartTaskUI(void *argument)
 		  app_menu_update_ds18b20(&g_menu_ctx, &ds18b20_data);
 		  osMutexRelease(MutexMenuHandle);
 
+		  got_event = true;
+	  }
+
+	  /* Đọc RTC mỗi 1 giây -> cập nhật time_cfg và dirty LCD */
+	  if ((osKernelGetTickCount() - rtc_last_tick) >= 1000U)
+	  {
+		  rtc_last_tick = osKernelGetTickCount();
+		  osMutexAcquire(MutexMenuHandle, osWaitForever);
+		  app_menu_update_time_from_rtc(&g_menu_ctx, &hrtc);
+		  osMutexRelease(MutexMenuHandle);
 		  got_event = true;
 	  }
 

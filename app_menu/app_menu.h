@@ -43,17 +43,18 @@ extern "C" {
 /** @brief Tất cả màn hình trong hệ thống menu */
 typedef enum
 {
-    SCREEN_WORK1 = 0,      /**< Màn hình làm việc 1 (hiển thị sensor)  */
-    SCREEN_WORK2,          /**< Màn hình làm việc 2 (mode + DS18B20)   */
-    SCREEN_MAIN_MENU,      /**< Menu chính                              */
-    SCREEN_MODE_SELECT,    /**< Chọn chế độ vận hành                   */
-    SCREEN_TIME_MENU,      /**< Danh sách trường thời gian              */
-    SCREEN_TIME_EDIT,      /**< Chỉnh sửa 1 trường thời gian           */
-    SCREEN_MINMAX_MODE,    /**< Chọn chế độ để cài MinMax              */
-    SCREEN_MINMAX_PARAM,   /**< Chọn thông số (Nhiệt độ/Độ ẩm/CO2/Đèn)*/
-    SCREEN_MINMAX_FIELD,   /**< Chọn trường (Min/Max hoặc Start/Stop)  */
-    SCREEN_MINMAX_EDIT,    /**< Chỉnh sửa giá trị MinMax               */
-    SCREEN_DS18B20_POS,    /**< Cài đặt vị trí DS18B20                 */
+    SCREEN_WORK1 = 0,      /**< Màn hình làm việc 1 (sensor realtime)        */
+    SCREEN_WORK2,          /**< Màn hình làm việc 2 (DS18B20 từng vị trí)   */
+    SCREEN_WORK3,          /**< Màn hình làm việc 3 (MinMax chế độ hiện tại)*/
+    SCREEN_MAIN_MENU,      /**< Menu chính                                   */
+    SCREEN_MODE_SELECT,    /**< Chọn chế độ vận hành                        */
+    SCREEN_TIME_MENU,      /**< Danh sách trường thời gian                   */
+    SCREEN_TIME_EDIT,      /**< Chỉnh sửa 1 trường thời gian                */
+    SCREEN_MINMAX_MODE,    /**< Chọn chế độ để cài MinMax                   */
+    SCREEN_MINMAX_PARAM,   /**< Chọn thông số (Nhiệt độ/Độ ẩm/CO2/Đèn)     */
+    SCREEN_MINMAX_FIELD,   /**< Chọn trường (Min/Max hoặc Start/Stop)       */
+    SCREEN_MINMAX_EDIT,    /**< Chỉnh sửa giá trị MinMax                    */
+    SCREEN_DS18B20_POS,    /**< Cài đặt vị trí DS18B20                      */
     SCREEN_COUNT
 } app_screen_t;
 
@@ -101,10 +102,10 @@ typedef struct
 /** @brief Cài đặt cho 1 chế độ (nhiet do / do am / co2 / den) */
 typedef struct
 {
-    minmax_range_t nhiet_do;   /**< x10 °C  : -40.0 ~ 80.0 */
-    minmax_range_t do_am;      /**< x10 %RH :   0.0 ~ 100.0 */
-    minmax_range_t co2;        /**< ppm     :   400 ~ 5000   */
-    minmax_den_t   den;
+    minmax_range_t nhiet_do;   /**< °C   : 20~35 (chay to/dinh ghim/qua the), 20~100 (thanh trung) */
+    minmax_range_t do_am;      /**< %RH  : 50~95  */
+    minmax_range_t co2;        /**< ppm  : 400~5000 (bước 500) */
+    minmax_den_t   den;        /**< giờ  : 0~24 (time_start_h / time_stop_h) */
 } mode_settings_t;
 
 /** @brief Cài đặt thời gian thực */
@@ -143,6 +144,8 @@ typedef struct
     uint8_t      cursor;                /**< Con trỏ trong list hiện tại     */
     uint8_t      scroll;                /**< Vị trí cuộn (top visible index) */
     bool         dirty;                 /**< true = cần vẽ lại LCD           */
+    bool         time_rtc_dirty;        /**< true = time_cfg đã sửa, cần ghi RTC */
+    bool         settings_dirty;        /**< true = mode/MinMax đã sửa, cần lưu Flash */
 
     /* --- Sensor data (cập nhật từ TaskUI) --- */
     scd41_queue_item_t scd41;
@@ -204,6 +207,23 @@ void app_menu_update_ds18b20(app_menu_ctx_t *ctx, const Ds18b20QueueItem *data);
  * @note  Gọi sau khi cập nhật sensor data.
  */
 void app_menu_mark_dirty(app_menu_ctx_t *ctx);
+
+/**
+ * @brief Đọc thời gian từ RTC phần cứng và cập nhật vào ctx->time_cfg.
+ * @note  Gọi định kỳ từ TaskUI (mỗi 1 giây) để màn hình làm việc luôn cập nhật.
+ * @param ctx   Con trỏ menu context.
+ * @param hrtc  Con trỏ RTC handle (từ CubeMX).
+ */
+void app_menu_update_time_from_rtc(app_menu_ctx_t *ctx, RTC_HandleTypeDef *hrtc);
+
+/**
+ * @brief Ghi ctx->time_cfg vào RTC phần cứng.
+ * @note  Gọi từ TaskUI sau khi phát hiện ctx->time_rtc_dirty == true.
+ *        Hàm tự clear cờ time_rtc_dirty sau khi ghi xong.
+ * @param ctx   Con trỏ menu context.
+ * @param hrtc  Con trỏ RTC handle (từ CubeMX).
+ */
+void app_menu_write_time_to_rtc(app_menu_ctx_t *ctx, RTC_HandleTypeDef *hrtc);
 
 #ifdef __cplusplus
 }

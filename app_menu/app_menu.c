@@ -5,6 +5,7 @@
  */
 
 #include "app_menu.h"
+#include "app_settings.h"
 #include "lcd.h"
 #include <string.h>
 #include <stdio.h>
@@ -60,6 +61,28 @@ static const char * const g_field_minmax[] = { "Min", "Max" };
 static const char * const g_field_den[]    = { "Time Start", "Time Stop" };
 
 /* g_mode_short removed - replaced by g_mode_char in render_work1/2 */
+
+/**
+ * @brief Trả về số thông số cài đặt của chế độ đang chọn.
+ * (Thanh trùng chỉ có 1 thông số: Nhiệt độ)
+ */
+static uint8_t get_mode_param_count(const app_menu_ctx_t *ctx)
+{
+    return (ctx->edit_mode_index == 3U) ? 1U : (uint8_t)MINMAX_PARAM_COUNT;
+}
+
+/**
+ * @brief Làm tròn số nguyên dương: round(x / divisor)
+ * Hỗ trợ cả âm: -73.5 deciC -> -74 (làm tròn ra xa 0)
+ */
+static inline int32_t round_div(int32_t x, int32_t divisor)
+{
+    /* Cộng/trừ nửa divisor trước khi chia để làm tròn */
+    if (x >= 0)
+        return (x + divisor / 2) / divisor;
+    else
+        return (x - divisor / 2) / divisor;
+}
 
 /* =========================================================================
  * Navigation helpers
@@ -252,9 +275,11 @@ static void render_work1(app_menu_ctx_t *ctx)
             avg_t += (int32_t)ctx->ds18b20[i].tempDeciC;
         }
         avg_t /= (int32_t)ctx->ds18b20_count;
-        avg_t /= 10;   /* deciC -> °C */
+        /* deciC -> °C, làm tròn: 235 -> 24, 234 -> 23, -235 -> -24 */
+        avg_t = round_div(avg_t, 10);
     }
-    int32_t humi = ctx->scd41.humidity_m_percent_rh / 1000L;
+    /* m%RH -> %RH, làm tròn: 73500 -> 74, 73499 -> 73 */
+    int32_t humi = round_div(ctx->scd41.humidity_m_percent_rh, 1000L);
 
     snprintf(line, sizeof(line), "T%ld A%ld C%u       ",
              avg_t, humi, ctx->scd41.co2);
@@ -268,15 +293,12 @@ static void render_work2(app_menu_ctx_t *ctx)
     char line[32];
     char slot[3][8];
 
-    /* ---- Dòng 0: vị trí 1, 2, 3  (cảm biến index 0,1,2) ----
-     * Ví dụ: "1:20 2:21 3:22  "  (16 chars)
-     * Mỗi slot: "N:TT" (4 chars) + space phân cách
-     */
+    /* ---- Dòng 0: vị trí 1, 2, 3  (cảm biến index 0,1,2) ---- */
     for (uint8_t i = 0U; i < 3U; i++)
     {
         if (i < ctx->ds18b20_count)
         {
-            int16_t t = ctx->ds18b20[i].tempDeciC / 10;
+            int16_t t = (int16_t)round_div((int32_t)ctx->ds18b20[i].tempDeciC, 10);
             snprintf(slot[i], sizeof(slot[i]), "%u:%d", (unsigned)(i + 1U), (int)t);
         }
         else
@@ -294,7 +316,7 @@ static void render_work2(app_menu_ctx_t *ctx)
     {
         if (i < ctx->ds18b20_count)
         {
-            int16_t t = ctx->ds18b20[i].tempDeciC / 10;
+            int16_t t = (int16_t)round_div((int32_t)ctx->ds18b20[i].tempDeciC, 10);
             snprintf(slot[i - 3U], sizeof(slot[0]), "%u:%d", (unsigned)(i + 1U), (int)t);
         }
         else
@@ -306,6 +328,73 @@ static void render_work2(app_menu_ctx_t *ctx)
     line[16] = '\0';
     lcd_put_cur(1, 0);
     lcd_send_string(line);
+}
+
+/**
+ * @brief Màn hình làm việc 3: hiển thị ngưỡng Min-Max của chế độ đang chạy.
+ *
+ * Chế độ thường (Chay to / Dinh ghim / Qua the):
+ *   Dòng 0: "[M] T[min]-[max] A[min]-[max]"  (16 chars)
+ *   Dòng 1: "    C[min]-[max]              "
+ *
+ * Chế độ Thanh trùng (chỉ có nhiệt độ):
+ *   Dòng 0: "[M] T[min]-[max]              "
+ *   Dòng 1: "                              "
+ *
+ * Chế độ Nghi: không có MinMax → hiển thị "---"
+ */
+static void render_work3(app_menu_ctx_t *ctx)
+{
+    char line[64];   /* 64 bytes: đủ cho worst-case snprintf với nhiều %d */
+    char mode_c = g_mode_char[ctx->active_mode];
+
+    if (ctx->active_mode == MODE_NGHI)
+    {
+        /* Chế độ Nghỉ: không có cài đặt MinMax */
+        snprintf(line, sizeof(line), "%c ---           ", mode_c);
+        line[16] = '\0';
+        lcd_put_cur(0, 0);
+        lcd_send_string(line);
+        lcd_put_cur(1, 0);
+        lcd_send_string("                ");
+        return;
+    }
+
+    /* Index chế độ (0-3 tương ứng Chay to / Dinh ghim / Qua the / Thanh trung) */
+    uint8_t m = (uint8_t)ctx->active_mode;
+    if (m >= 4U) m = 0U;   /* bảo vệ */
+    const mode_settings_t *cfg = &ctx->mode_cfg[m];
+
+    if (ctx->active_mode == MODE_THANH_TRUNG)
+    {
+        /* Thanh trùng: chỉ hiển thị nhiệt độ */
+        snprintf(line, sizeof(line), "%c T%d-%d          ",
+                 mode_c,
+                 (int)cfg->nhiet_do.min,
+                 (int)cfg->nhiet_do.max);
+        line[16] = '\0';
+        lcd_put_cur(0, 0);
+        lcd_send_string(line);
+        lcd_put_cur(1, 0);
+        lcd_send_string("                ");
+    }
+    else
+    {
+        /* Các chế độ còn lại: T, A trên dòng 0; C trên dòng 1 */
+        snprintf(line, sizeof(line), "%c T%d-%d A%d-%d  ",
+                 mode_c,
+                 (int)cfg->nhiet_do.min, (int)cfg->nhiet_do.max,
+                 (int)cfg->do_am.min,    (int)cfg->do_am.max);
+        line[16] = '\0';
+        lcd_put_cur(0, 0);
+        lcd_send_string(line);
+
+        snprintf(line, sizeof(line), "  C%d-%d        ",
+                 (int)cfg->co2.min, (int)cfg->co2.max);
+        line[16] = '\0';
+        lcd_put_cur(1, 0);
+        lcd_send_string(line);
+    }
 }
 
 static void render_main_menu(app_menu_ctx_t *ctx)
@@ -342,7 +431,7 @@ static void render_minmax_mode(app_menu_ctx_t *ctx)
 
 static void render_minmax_param(app_menu_ctx_t *ctx)
 {
-    render_list_2row(g_minmax_param_items, MINMAX_PARAM_COUNT,
+    render_list_2row(g_minmax_param_items, get_mode_param_count(ctx),
                      ctx->cursor, ctx->scroll);
 }
 
@@ -422,6 +511,8 @@ static void save_time_edit(app_menu_ctx_t *ctx)
     case 5U: ctx->time_cfg.second = (uint8_t)ctx->edit_value;  break;
     default: break;
     }
+    /* Đánh dấu để TaskUI ghi lại vào RTC */
+    ctx->time_rtc_dirty = true;
 }
 
 /* =========================================================================
@@ -429,14 +520,18 @@ static void save_time_edit(app_menu_ctx_t *ctx)
  * ========================================================================= */
 
 static void get_minmax_range(app_menu_ctx_t *ctx,
-                              int32_t *vmin, int32_t *vmax)
+                               int32_t *vmin, int32_t *vmax)
 {
     switch ((minmax_param_t)ctx->edit_param_index)
     {
-    case PARAM_NHIET_DO: *vmin = -400;  *vmax = 800;   break; /* x10 °C  */
-    case PARAM_DO_AM:    *vmin = 0;     *vmax = 1000;  break; /* x10 %RH */
+    case PARAM_NHIET_DO:
+        /* Thanh trùng: 20-100°C; các chế độ khác: 20-35°C */
+        *vmin = 20;
+        *vmax = (ctx->edit_mode_index == 3U) ? 100 : 35;
+        break;
+    case PARAM_DO_AM:    *vmin = 50;    *vmax = 95;    break; /* %RH     */
     case PARAM_CO2:      *vmin = 400;   *vmax = 5000;  break; /* ppm     */
-    case PARAM_DEN:      *vmin = 0;     *vmax = 2359;  break; /* HHMM    */
+    case PARAM_DEN:      *vmin = 0;     *vmax = 24;    break; /* giờ     */
     default:             *vmin = 0;     *vmax = 100;   break;
     }
 }
@@ -456,12 +551,10 @@ static int32_t get_minmax_value(app_menu_ctx_t *ctx)
         return (ctx->edit_field_index == 0U) ?
                (int32_t)cfg->co2.min : (int32_t)cfg->co2.max;
     case PARAM_DEN:
-        if (ctx->edit_field_index == 0U)
-            return (int32_t)cfg->den.time_start_h * 100 +
-                   (int32_t)cfg->den.time_start_m;
-        else
-            return (int32_t)cfg->den.time_stop_h * 100 +
-                   (int32_t)cfg->den.time_stop_m;
+        /* Đèn lưu theo giờ (0-24) */
+        return (ctx->edit_field_index == 0U) ?
+               (int32_t)cfg->den.time_start_h :
+               (int32_t)cfg->den.time_stop_h;
     default:
         return 0;
     }
@@ -485,20 +578,23 @@ static void save_minmax_value(app_menu_ctx_t *ctx)
         else                             cfg->co2.max = (int16_t)ctx->edit_value;
         break;
     case PARAM_DEN:
+        /* Đèn lưu theo giờ (0-24) */
         if (ctx->edit_field_index == 0U)
         {
-            cfg->den.time_start_h = (uint8_t)(ctx->edit_value / 100);
-            cfg->den.time_start_m = (uint8_t)(ctx->edit_value % 100);
+            cfg->den.time_start_h = (uint8_t)ctx->edit_value;
+            cfg->den.time_start_m = 0U;
         }
         else
         {
-            cfg->den.time_stop_h = (uint8_t)(ctx->edit_value / 100);
-            cfg->den.time_stop_m = (uint8_t)(ctx->edit_value % 100);
+            cfg->den.time_stop_h = (uint8_t)ctx->edit_value;
+            cfg->den.time_stop_m = 0U;
         }
         break;
     default:
         break;
     }
+    /* MinMax thay đổi, cần lưu Flash khi thoát menu */
+    ctx->settings_dirty = true;
 }
 
 /* =========================================================================
@@ -526,9 +622,33 @@ static void handle_work2(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     switch (ev)
     {
     case RTRECD_EVENT_ROTATE_CCW:
-        /* fall-through */
+        ctx->screen = SCREEN_WORK1;
+        ctx->dirty  = true;
+        break;
+    case RTRECD_EVENT_ROTATE_CW:
+        ctx->screen = SCREEN_WORK3;
+        ctx->dirty  = true;
+        break;
     case RTRECD_EVENT_BUTTON_LONG:
         ctx->screen = SCREEN_WORK1;
+        ctx->dirty  = true;
+        break;
+    case RTRECD_EVENT_BUTTON_SHORT:
+        nav_push(ctx, SCREEN_MAIN_MENU);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_work3(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
+{
+    switch (ev)
+    {
+    case RTRECD_EVENT_ROTATE_CCW:
+        /* fall-through */
+    case RTRECD_EVENT_BUTTON_LONG:
+        ctx->screen = SCREEN_WORK2;
         ctx->dirty  = true;
         break;
     case RTRECD_EVENT_BUTTON_SHORT:
@@ -560,6 +680,11 @@ static void handle_main_menu(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
         }
         break;
     case RTRECD_EVENT_BUTTON_LONG:
+        /* Thoát về màn hình làm việc: lưu Flash nếu có thay đổi */
+        if (ctx->settings_dirty)
+        {
+            app_settings_save(ctx);   /* clear settings_dirty bên trong */
+        }
         nav_pop(ctx); /* quay về màn hình làm việc */
         break;
     default:
@@ -578,7 +703,8 @@ static void handle_mode_select(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
         list_ccw(ctx);
         break;
     case RTRECD_EVENT_BUTTON_SHORT:
-        ctx->active_mode = (app_mode_t)ctx->cursor;
+        ctx->active_mode   = (app_mode_t)ctx->cursor;
+        ctx->settings_dirty = true;   /* chế độ thay đổi, cần lưu Flash */
         ctx->dirty = true;
         nav_pop(ctx);
         break;
@@ -657,10 +783,11 @@ static void handle_minmax_mode(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 
 static void handle_minmax_param(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 {
+    uint8_t param_count = get_mode_param_count(ctx);
     switch (ev)
     {
     case RTRECD_EVENT_ROTATE_CW:
-        list_cw(ctx, MINMAX_PARAM_COUNT);
+        list_cw(ctx, param_count);
         break;
     case RTRECD_EVENT_ROTATE_CCW:
         list_ccw(ctx);
@@ -708,13 +835,23 @@ static void handle_minmax_field(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 
 static void handle_minmax_edit(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 {
+    /* Bước nhảy: CO2 = 500 ppm/bước, các thông số khác = 1 */
+    int32_t step = ((minmax_param_t)ctx->edit_param_index == PARAM_CO2) ? 500 : 1;
     switch (ev)
     {
     case RTRECD_EVENT_ROTATE_CW:
-        edit_cw(ctx);
+        if (ctx->edit_value + step <= ctx->edit_max)
+            ctx->edit_value += step;
+        else
+            ctx->edit_value = ctx->edit_max;
+        ctx->dirty = true;
         break;
     case RTRECD_EVENT_ROTATE_CCW:
-        edit_ccw(ctx);
+        if (ctx->edit_value - step >= ctx->edit_min)
+            ctx->edit_value -= step;
+        else
+            ctx->edit_value = ctx->edit_min;
+        ctx->dirty = true;
         break;
     case RTRECD_EVENT_BUTTON_SHORT:
         save_minmax_value(ctx);
@@ -766,17 +903,23 @@ void app_menu_init(app_menu_ctx_t *ctx)
     /* MinMax mặc định cho cả 4 chế độ */
     for (uint8_t i = 0U; i < 4U; i++)
     {
-        ctx->mode_cfg[i].nhiet_do.min   = 150;   /* 15.0 °C  */
-        ctx->mode_cfg[i].nhiet_do.max   = 350;   /* 35.0 °C  */
-        ctx->mode_cfg[i].do_am.min      = 600;   /* 60.0 %RH */
-        ctx->mode_cfg[i].do_am.max      = 900;   /* 90.0 %RH */
-        ctx->mode_cfg[i].co2.min        = 400;   /* 400  ppm */
-        ctx->mode_cfg[i].co2.max        = 1500;  /* 1500 ppm */
+        ctx->mode_cfg[i].nhiet_do.min   = 20;    /* °C  */
+        ctx->mode_cfg[i].nhiet_do.max   = (i == 3U) ? 100 : 35; /* Thanh trùng: 100°C */
+        ctx->mode_cfg[i].do_am.min      = 50;    /* %RH */
+        ctx->mode_cfg[i].do_am.max      = 95;    /* %RH */
+        ctx->mode_cfg[i].co2.min        = 400;   /* ppm */
+        ctx->mode_cfg[i].co2.max        = 2000;  /* ppm */
         ctx->mode_cfg[i].den.time_start_h = 6U;
         ctx->mode_cfg[i].den.time_start_m = 0U;
         ctx->mode_cfg[i].den.time_stop_h  = 20U;
         ctx->mode_cfg[i].den.time_stop_m  = 0U;
     }
+
+    /*
+     * Load từ Flash (đè lên giá trị mặc định ở trên nếu Flash hợp lệ).
+     * Nếu Flash chưa có dữ liệu, giữ nguyên giá trị mặc định.
+     */
+    app_settings_load(ctx);
 }
 
 void app_menu_handle_event(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
@@ -785,6 +928,7 @@ void app_menu_handle_event(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     {
     case SCREEN_WORK1:        handle_work1(ctx, ev);        break;
     case SCREEN_WORK2:        handle_work2(ctx, ev);        break;
+    case SCREEN_WORK3:        handle_work3(ctx, ev);        break;
     case SCREEN_MAIN_MENU:    handle_main_menu(ctx, ev);    break;
     case SCREEN_MODE_SELECT:  handle_mode_select(ctx, ev);  break;
     case SCREEN_TIME_MENU:    handle_time_menu(ctx, ev);    break;
@@ -807,6 +951,7 @@ void app_menu_render(app_menu_ctx_t *ctx)
     {
     case SCREEN_WORK1:        render_work1(ctx);        break;
     case SCREEN_WORK2:        render_work2(ctx);        break;
+    case SCREEN_WORK3:        render_work3(ctx);        break;
     case SCREEN_MAIN_MENU:    render_main_menu(ctx);    break;
     case SCREEN_MODE_SELECT:  render_mode_select(ctx);  break;
     case SCREEN_TIME_MENU:    render_time_menu(ctx);    break;
@@ -823,7 +968,8 @@ void app_menu_render(app_menu_ctx_t *ctx)
 void app_menu_update_scd41(app_menu_ctx_t *ctx, const scd41_queue_item_t *data)
 {
     ctx->scd41 = *data;
-    if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2)
+    if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2
+        || ctx->screen == SCREEN_WORK3)
     {
         ctx->dirty = true;
     }
@@ -840,7 +986,8 @@ void app_menu_update_ds18b20(app_menu_ctx_t *ctx, const Ds18b20QueueItem *data)
             ctx->ds18b20_count = (uint8_t)(idx + 1U);
         }
     }
-    if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2)
+    if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2
+        || ctx->screen == SCREEN_WORK3)
     {
         ctx->dirty = true;
     }
@@ -849,4 +996,70 @@ void app_menu_update_ds18b20(app_menu_ctx_t *ctx, const Ds18b20QueueItem *data)
 void app_menu_mark_dirty(app_menu_ctx_t *ctx)
 {
     ctx->dirty = true;
+}
+
+/* =========================================================================
+ * RTC integration
+ * ========================================================================= */
+
+void app_menu_update_time_from_rtc(app_menu_ctx_t *ctx, RTC_HandleTypeDef *hrtc)
+{
+    RTC_TimeTypeDef sTime = {0};
+    RTC_DateTypeDef sDate = {0};
+
+    /*
+     * Lưu ý STM32F1 legacy RTC:
+     * Phải gọi GetTime trước GetDate để latch đúng giá trị.
+     */
+    if (HAL_RTC_GetTime(hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK) return;
+    if (HAL_RTC_GetDate(hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK) return;
+
+    ctx->time_cfg.hour   = sTime.Hours;
+    ctx->time_cfg.minute = sTime.Minutes;
+    ctx->time_cfg.second = sTime.Seconds;
+    ctx->time_cfg.day    = sDate.Date;
+    ctx->time_cfg.month  = sDate.Month;
+    ctx->time_cfg.year   = 2000U + (uint16_t)sDate.Year;
+
+    /* Vẽ lại nếu đang ở màn hình làm việc */
+    if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2
+        || ctx->screen == SCREEN_WORK3)
+    {
+        ctx->dirty = true;
+    }
+}
+
+void app_menu_write_time_to_rtc(app_menu_ctx_t *ctx, RTC_HandleTypeDef *hrtc)
+{
+    RTC_TimeTypeDef sTime = {0};
+    RTC_DateTypeDef sDate = {0};
+
+    sTime.Hours   = ctx->time_cfg.hour;
+    sTime.Minutes = ctx->time_cfg.minute;
+    sTime.Seconds = ctx->time_cfg.second;
+
+    sDate.Date    = ctx->time_cfg.day;
+    sDate.Month   = ctx->time_cfg.month;
+    sDate.Year    = (uint8_t)(ctx->time_cfg.year % 100U);
+    sDate.WeekDay = RTC_WEEKDAY_MONDAY; /* Ngày trong tuần có thể bỏ qua */
+
+    HAL_RTC_SetTime(hrtc, &sTime, RTC_FORMAT_BIN);
+    HAL_RTC_SetDate(hrtc, &sDate, RTC_FORMAT_BIN);
+
+    /* Ghi magic number vào BKP DR1 để giữ thời gian sau reset */
+    HAL_RTCEx_BKUPWrite(hrtc, RTC_BKP_DR1, 0xA5A5U);
+
+    /*
+     * Lưu ngày vào BKP DR2/DR3 riêng để phòng trường hợp debugger
+     * xoá BKP registers của HAL nhưng không xoá DR1.
+     * DR2 [15:9] = year-2000  [8:5] = month  [4:0] = day
+     * DR3 = magic 0x5A5A
+     */
+    uint16_t date_bkp = (uint16_t)(((ctx->time_cfg.year % 100U) << 9) |
+                                   ((uint16_t)ctx->time_cfg.month << 5) |
+                                    (uint16_t)ctx->time_cfg.day);
+    HAL_RTCEx_BKUPWrite(hrtc, RTC_BKP_DR2, date_bkp);
+    HAL_RTCEx_BKUPWrite(hrtc, RTC_BKP_DR3, 0x5A5AU);
+
+    ctx->time_rtc_dirty = false;
 }
