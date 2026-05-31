@@ -280,7 +280,7 @@ static const char* scd4x_runtime_fault_hint(scd4x_runtime_fault_cause_t cause) {
         case SCD4X_RUNTIME_FAULT_CRC:
             return "data corrupted, check cable/noise";
         case SCD4X_RUNTIME_FAULT_BUSY:
-            return "bus busy, check shared bus access";
+            return "check sensor power/wiring - SDA may be stuck low (no pull-ups when sensor removed)";
         case SCD4X_RUNTIME_FAULT_RTOS:
             return "check i2c_mutex is set in scd41_config and RTOS is running";
         default:
@@ -316,7 +316,7 @@ static const char* scd4x_runtime_fault_simple_text(
         case SCD4X_RUNTIME_FAULT_CRC:
             return "du lieu loi (CRC), giao tiep khong on dinh";
         case SCD4X_RUNTIME_FAULT_BUSY:
-            return "bus dang ban";
+            return "bus I2C bi ket - co the mat nguon hoac mat day cam bien";
         case SCD4X_RUNTIME_FAULT_RTOS:
             return "loi RTOS: i2c_mutex chua duoc gan hoac acquire that bai";
         default:
@@ -405,13 +405,24 @@ void scd4x_runtime_default_itm_event_handler(const scd41_config_t* config,
             itm_print("\r\n");
             break;
 
-        case SCD4X_RUNTIME_EVENT_RECOVERED:
+        case SCD4X_RUNTIME_EVENT_RECOVERED: {
+            uint32_t n = g_scd4x_itm_fault_log_state.repeat_count;
+            scd4x_runtime_fault_cause_t prev_cause = g_scd4x_itm_fault_log_state.cause;
             g_scd4x_itm_fault_log_state.has_active_fault = false;
             g_scd4x_itm_fault_log_state.repeat_count = 0U;
             itm_print("[SCD41] ");
             itm_print(scd4x_runtime_bus_to_text(config));
-            itm_print(": da ket noi lai sensor\r\n");
+            itm_print(": da ket noi lai sensor");
+            if (n > 1U) {
+                itm_print(" (sau ");
+                itm_put_int((int)n);
+                itm_print(" lan loi ");
+                itm_print(scd4x_runtime_fault_cause_to_text(prev_cause));
+                itm_print(")");
+            }
+            itm_print("\r\n");
             break;
+        }
 
         case SCD4X_RUNTIME_EVENT_RESTART_ATTEMPT:
             if (!g_scd4x_itm_short_log_enabled) {
@@ -548,10 +559,15 @@ bool scd4x_runtime_poll(const scd41_config_t* config, scd41_context_t* context) 
     }
 
     fault_was_active = context->fault_active;
+    scd4x_runtime_fault_cause_t fault_cause_snapshot = context->fault_cause;
     context->error = scd4x_runtime_read_if_ready(config, context);
     if (context->error == NO_ERROR) {
-        /* After a disconnect/power-loss fault, force start command once bus is alive again. */
-        if (fault_was_active && !context->data_ready) {
+        /* After a disconnect/power-loss fault (NOT CRC), force start command once bus is alive again.
+         * CRC errors must NOT trigger a restart: the sensor is still measuring normally.
+         * Sending START while sensor is in periodic mode causes a NACK → bus recovery →
+         * I2C peripheral DeInit/Init → further CRC errors on subsequent reads (feedback loop). */
+        if (fault_was_active && !context->data_ready &&
+            fault_cause_snapshot != SCD4X_RUNTIME_FAULT_CRC) {
             _measurement_running = false;
             (void)scd4x_runtime_start_periodic_measurement(config, context);
             context->error = scd4x_runtime_read_if_ready(config, context);

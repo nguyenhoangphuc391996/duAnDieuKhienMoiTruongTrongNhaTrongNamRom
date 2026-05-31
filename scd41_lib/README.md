@@ -104,11 +104,13 @@ scd4x_runtime_default_itm_event_handler
 ## 4. Sử dụng một SCD41 (trường hợp thông thường)
 
 ```c
-/* --- Biến toàn cục --- */
+
 static scd41_config_t  g_scd41_cfg = {0};
 static scd41_context_t g_scd41_ctx = {0};
 
 /* --- Trong task khởi tạo --- */
+scd41_config_t  g_scd41_cfg = {0};
+scd41_context_t g_scd41_ctx = {0};
 g_scd41_cfg.i2c_handle = &hi2c1;
 g_scd41_cfg.i2c_mutex  = MutexI2C1Handle;
 
@@ -126,12 +128,12 @@ for (;;)
 }
 
 /* --- Task consumer đọc queue --- */
-scd41_queue_item_t item;
-if (osMessageQueueGet(QueueSCD41Handle, &item, NULL, osWaitForever) == osOK)
+scd41_queue_item_t measurement;
+if (osMessageQueueGet(QueueSCD41Handle, &measurement, NULL, osWaitForever) == osOK)
 {
-    scd41_print_scd41_measurement(item.co2,
-                                  item.temperature_m_deg_c,
-                                  item.humidity_m_percent_rh);
+    scd41_print_scd41_measurement(measurement.co2,
+                                  measurement.temperature_m_deg_c,
+                                  measurement.humidity_m_percent_rh);
 }
 ```
 

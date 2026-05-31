@@ -175,6 +175,26 @@ void rtrecd_isr_ab(rtrecd_t *h)
 	rtrecd_update_rotation_from_isr(h);
 }
 
+void rtrecd_isr_sw(rtrecd_t *h)
+{
+	bool sw_active;
+	uint32_t now_ms;
+
+	if ((h == NULL) || (h->initialized == false))
+	{
+		return;
+	}
+
+	sw_active = rtrecd_pin_is_active(&h->pin_sw, h->sw_active_low);
+	now_ms = h->get_tick_ms();
+
+	if (sw_active != h->btn_raw_state)
+	{
+		h->btn_raw_state = sw_active;
+		h->btn_last_bounce_ms = now_ms;
+	}
+}
+
 bool rtrecd_is_button_pressed(const rtrecd_t *h)
 {
 	if ((h == NULL) || (h->initialized == false))
@@ -255,6 +275,9 @@ rtrecd_queue_item_t rtrecd_process(rtrecd_t *h)
 	}
 
 	now_ms = h->get_tick_ms();
+
+	/* btn_raw_state được cập nhật từ rtrecd_isr_sw (ngắt).
+	 * Nếu không dùng ngắt SW, fallback polling vẫn hoạt động đúng. */
 	sw_active = rtrecd_pin_is_active(&h->pin_sw, h->sw_active_low);
 
 	if (sw_active != h->btn_raw_state)

@@ -26,7 +26,7 @@
 #include "rtrecd.h"
 #include "lcd.h"
 #include "scd4x_i2c.h"
-//test
+#include "ds18b20_app.h"
 
 #undef Error_Handler
 /* USER CODE END Includes */
@@ -50,11 +50,13 @@
 I2C_HandleTypeDef hi2c1;
 I2C_HandleTypeDef hi2c2;
 
+UART_HandleTypeDef huart1;
+
 /* Definitions for TaskInput */
 osThreadId_t TaskInputHandle;
 const osThreadAttr_t TaskInput_attributes = {
   .name = "TaskInput",
-  .stack_size = 128 * 4,
+  .stack_size = 200 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskUI */
@@ -81,15 +83,20 @@ osMessageQueueId_t QueueSCD41Handle;
 const osMessageQueueAttr_t QueueSCD41_attributes = {
   .name = "QueueSCD41"
 };
+/* Definitions for QueueDS18B20 */
+osMessageQueueId_t QueueDS18B20Handle;
+const osMessageQueueAttr_t QueueDS18B20_attributes = {
+  .name = "QueueDS18B20"
+};
 /* Definitions for MutexI2C2 */
 osMutexId_t MutexI2C2Handle;
 const osMutexAttr_t MutexI2C2_attributes = {
   .name = "MutexI2C2"
 };
-/* Definitions for MutexI2C1 */
-osMutexId_t MutexI2C1Handle;
-const osMutexAttr_t MutexI2C1_attributes = {
-  .name = "MutexI2C1"
+/* Definitions for MutexSCD41 */
+osMutexId_t MutexSCD41Handle;
+const osMutexAttr_t MutexSCD41_attributes = {
+  .name = "MutexSCD41"
 };
 /* USER CODE BEGIN PV */
 
@@ -108,6 +115,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_USART1_UART_Init(void);
 void StartTaskInput(void *argument);
 void StartTaskUI(void *argument);
 void StartTaskLCD(void *argument);
@@ -152,6 +160,7 @@ int main(void)
   MX_GPIO_Init();
   MX_I2C2_Init();
   MX_I2C1_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -162,8 +171,8 @@ int main(void)
   /* creation of MutexI2C2 */
   MutexI2C2Handle = osMutexNew(&MutexI2C2_attributes);
 
-  /* creation of MutexI2C1 */
-  MutexI2C1Handle = osMutexNew(&MutexI2C1_attributes);
+  /* creation of MutexSCD41 */
+  MutexSCD41Handle = osMutexNew(&MutexSCD41_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -184,6 +193,9 @@ int main(void)
   /* creation of QueueSCD41 */
   QueueSCD41Handle = osMessageQueueNew (16, sizeof(scd41_queue_item_t), &QueueSCD41_attributes);
 
+  /* creation of QueueDS18B20 */
+  QueueDS18B20Handle = osMessageQueueNew (16, sizeof(Ds18b20QueueItem), &QueueDS18B20_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -199,22 +211,7 @@ int main(void)
   TaskLCDHandle = osThreadNew(StartTaskLCD, NULL, &TaskLCD_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* Kiem tra toan bo RTOS objects — neu bat ky object nao = NULL thi heap het,
-   * tang configTOTAL_HEAP_SIZE trong FreeRTOSConfig.h. */
-
-  // In ra số byte Heap còn dư thực tế sau khi đã tạo hết các Object
   free_heap = xPortGetFreeHeapSize();
-
-  if ((MutexI2C2Handle  == NULL) ||
-      (MutexI2C1Handle  == NULL) ||
-      (QueueEC11Handle  == NULL) ||
-      (QueueSCD41Handle == NULL) ||
-      (TaskInputHandle  == NULL) ||
-      (TaskUIHandle     == NULL) ||
-      (TaskLCDHandle    == NULL))
-  {
-      Error_Handler(); /* Heap het — tang configTOTAL_HEAP_SIZE */
-  }
 
   /* USER CODE END RTOS_THREADS */
 
@@ -343,6 +340,39 @@ static void MX_I2C2_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_HalfDuplex_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -358,15 +388,9 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
-  /*Configure GPIO pins : PB12 PB13 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13;
+  /*Configure GPIO pins : PB12 PB13 PB14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PB14 */
-  GPIO_InitStruct.Pin = GPIO_PIN_14;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
@@ -390,6 +414,20 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   {
     rtrecd_isr_b(&g_rtrecd);
   }
+  else if (GPIO_Pin == GPIO_PIN_14)
+  {
+    rtrecd_isr_sw(&g_rtrecd);
+  }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  owReadHandler(huart);
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  owErrorHandler(huart);
 }
 /* USER CODE END 4 */
 
@@ -412,27 +450,42 @@ void StartTaskInput(void *argument)
 	scd41_context_t scd41_context = {0};
 
 	scd41_config.i2c_handle = &hi2c1;
-	scd41_config.i2c_mutex = MutexI2C1Handle;
+	scd41_config.i2c_mutex = MutexSCD41Handle;
 
 	scd4x_runtime_init(&scd41_config, &scd41_context);
 	scd4x_runtime_start_periodic_measurement(&scd41_config, &scd41_context);
 
-	/* SCD41 chỉ cần poll mỗi 500ms — sensor đo mỗi 5 giây,
-	 * poll quá dày gây ~2500 lần I2C get_data_ready vô nghĩa/chu kỳ. */
-	uint32_t scd41_last_tick = osKernelGetTickCount();
 
+	  OneWire_Config  owCfg1;
+	  OneWire_Context owCtx1;
+
+	  owCfg1.huart      = &huart1;
+	  owCfg1.maxDevices = 5U;
+
+	  Ds18b20Api_Init(&owCfg1, &owCtx1);
+
+	uint32_t scd41_last_tick = osKernelGetTickCount();
+	uint32_t ds18b20_last_tick = osKernelGetTickCount();
   /* Infinite loop */
   for(;;)
   {
 	  rtrecd_service(&g_rtrecd, QueueEC11Handle);
 
-	  if ((osKernelGetTickCount() - scd41_last_tick) >= 500U)
+	  if((osKernelGetTickCount() - scd41_last_tick) >= 500U)
 	  {
 		  scd41_last_tick = osKernelGetTickCount();
-		  Scd41Api_Service(&scd41_config,
-						   &scd41_context,
-						   QueueSCD41Handle,
-						   scd4x_runtime_default_itm_event_handler);
+	  Scd41Api_Service(&scd41_config,
+					   &scd41_context,
+					   QueueSCD41Handle,
+					   scd4x_runtime_default_itm_event_handler);
+
+	  }
+
+	  if((osKernelGetTickCount() - ds18b20_last_tick) > 5000u){
+		  ds18b20_last_tick = osKernelGetTickCount();
+		  Ds18b20Api_Service(&owCfg1, &owCtx1,
+				  	  	  	 QueueDS18B20Handle,
+	                         Ds18b20Api_DefaultOnWireFault);
 	  }
 	  ramduinput = uxTaskGetStackHighWaterMark(NULL);
 	  osDelay(2);
@@ -453,6 +506,8 @@ void StartTaskUI(void *argument)
   /* USER CODE BEGIN StartTaskUI */
 	rtrecd_queue_item_t ev;
 	scd41_queue_item_t scd41_data;
+	Ds18b20QueueItem ds18b20_data;
+
 	bool got_event;
 
   /* Infinite loop */
@@ -477,16 +532,20 @@ void StartTaskUI(void *argument)
 		  got_event = true;
 	  }
 
-	  if (got_event)
+	  if (osMessageQueueGet(QueueDS18B20Handle, &ds18b20_data, NULL, 0U) == osOK)
 	  {
-		  /* Còn có thể có item tiếp theo trong queue — tiếp tục lấy ngay. */
-		  continue;
+		  Ds18b20Api_PrintItem(&ds18b20_data);
+		  got_event = true;
 	  }
 
-	  /* Không có event: đo stack rồi yield. TaskUI chỉ hiển thị,
-	   * không cần phản ứng dưới 10ms nên dùng delay 10ms thay vì 2ms. */
-	  ramduui = uxTaskGetStackHighWaterMark(NULL);
+	  if(got_event)
+	  {
+		  continue;
+	  }
 	  osDelay(10);
+
+	  ramduui = uxTaskGetStackHighWaterMark(NULL);
+
   }
   /* USER CODE END StartTaskUI */
 }

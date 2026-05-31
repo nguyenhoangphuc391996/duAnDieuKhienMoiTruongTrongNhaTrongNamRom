@@ -199,6 +199,68 @@ int8_t sensirion_i2c_hal_write(uint8_t address, const uint8_t* data,
     return status;
 }
 
+/**
+ * GPIO clock-stretching recovery: toggle SCL up to 9 times to release a
+ * slave device that is holding SDA low (e.g. after sensor power loss when
+ * the module's on-board pull-ups are also gone).
+ * After freeing SDA, send a STOP condition by hand, then re-init the
+ * I2C peripheral normally.
+ *
+ * STM32F103 default pins: I2C1 → PB6(SCL) / PB7(SDA)
+ *                          I2C2 → PB10(SCL) / PB11(SDA)
+ */
+static void sensirion_i2c_hal_gpio_recover(I2C_HandleTypeDef* i2c) {
+    GPIO_TypeDef* port;
+    uint16_t scl_pin, sda_pin;
+    GPIO_InitTypeDef gpio = {0};
+
+    if ((i2c == NULL) || (i2c->Instance == NULL)) {
+        return;
+    }
+
+    if (i2c->Instance == I2C1) {
+        port    = GPIOB;
+        scl_pin = GPIO_PIN_6;
+        sda_pin = GPIO_PIN_7;
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+    } else if (i2c->Instance == I2C2) {
+        port    = GPIOB;
+        scl_pin = GPIO_PIN_10;
+        sda_pin = GPIO_PIN_11;
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+    } else {
+        return;
+    }
+
+    /* Temporarily take the pins as open-drain outputs */
+    gpio.Mode  = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull  = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+
+    gpio.Pin = scl_pin | sda_pin;
+    HAL_GPIO_Init(port, &gpio);
+
+    HAL_GPIO_WritePin(port, scl_pin | sda_pin, GPIO_PIN_SET);
+    HAL_Delay(1);
+
+    /* Toggle SCL up to 9 times until SDA goes high */
+    for (int i = 0; i < 9; i++) {
+        if (HAL_GPIO_ReadPin(port, sda_pin) == GPIO_PIN_SET) {
+            break;  /* SDA released */
+        }
+        HAL_GPIO_WritePin(port, scl_pin, GPIO_PIN_RESET);
+        HAL_Delay(1);
+        HAL_GPIO_WritePin(port, scl_pin, GPIO_PIN_SET);
+        HAL_Delay(1);
+    }
+
+    /* Generate STOP: SDA low while SCL high, then SDA high */
+    HAL_GPIO_WritePin(port, sda_pin, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(port, sda_pin, GPIO_PIN_SET);
+    HAL_Delay(1);
+}
+
 int16_t sensirion_i2c_hal_recover_bus(void) {
     if (g_i2c_handle == NULL) {
         return (int16_t)HAL_ERROR;
@@ -206,6 +268,10 @@ int16_t sensirion_i2c_hal_recover_bus(void) {
 
     (void)HAL_I2C_DeInit(g_i2c_handle);
     sensirion_i2c_hal_force_reset_instance(g_i2c_handle);
+
+    /* Bit-bang recovery BEFORE re-init so the peripheral sees a clean bus */
+    sensirion_i2c_hal_gpio_recover(g_i2c_handle);
+
     (void)HAL_I2C_Init(g_i2c_handle);
 
     return (int16_t)HAL_OK;

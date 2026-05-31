@@ -146,6 +146,15 @@ void rtrecd_isr_b(rtrecd_t *h);
 void rtrecd_isr_ab(rtrecd_t *h);
 
 /**
+ * @brief Callback ngắt cho chân SW của encoder.
+ *
+ * Gọi hàm này trong ISR hoặc callback EXTI ứng với chân SW (nút nhấn).
+ * Việc bắt cạnh SW bằng ngắt giúp không bỏ sót nhấn ngắn ngay cả khi
+ * task polling bị trễ.
+ */
+void rtrecd_isr_sw(rtrecd_t *h);
+
+/**
  * @brief Xử lý định kỳ và trả về event của encoder.
  *
  * Hàm này cần được gọi theo chu kỳ trong task input. Mỗi lần gọi sẽ:
