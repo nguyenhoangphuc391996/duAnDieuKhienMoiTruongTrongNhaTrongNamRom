@@ -56,7 +56,7 @@ UART_HandleTypeDef huart1;
 osThreadId_t TaskInputHandle;
 const osThreadAttr_t TaskInput_attributes = {
   .name = "TaskInput",
-  .stack_size = 200 * 4,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for TaskUI */
@@ -72,6 +72,13 @@ const osThreadAttr_t TaskLCD_attributes = {
   .name = "TaskLCD",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for TaskDS18B20 */
+osThreadId_t TaskDS18B20Handle;
+const osThreadAttr_t TaskDS18B20_attributes = {
+  .name = "TaskDS18B20",
+  .stack_size = 180 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal7,
 };
 /* Definitions for QueueEC11 */
 osMessageQueueId_t QueueEC11Handle;
@@ -106,7 +113,7 @@ static rtrecd_t g_rtrecd = {
   .pin_sw = {GPIOB, GPIO_PIN_14}
 };
 
-uint32_t ramduinput, ramduui, ramdulcd;
+uint32_t ramduinput, ramduui, ramdulcd, ramduds18b20;
 uint32_t free_heap __attribute__((unused));
 /* USER CODE END PV */
 
@@ -119,6 +126,7 @@ static void MX_USART1_UART_Init(void);
 void StartTaskInput(void *argument);
 void StartTaskUI(void *argument);
 void StartTaskLCD(void *argument);
+void StartTaskDS18B20(void *argument);
 
 /* USER CODE BEGIN PFP */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin);
@@ -209,6 +217,9 @@ int main(void)
 
   /* creation of TaskLCD */
   TaskLCDHandle = osThreadNew(StartTaskLCD, NULL, &TaskLCD_attributes);
+
+  /* creation of TaskDS18B20 */
+  TaskDS18B20Handle = osThreadNew(StartTaskDS18B20, NULL, &TaskDS18B20_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   free_heap = xPortGetFreeHeapSize();
@@ -456,16 +467,11 @@ void StartTaskInput(void *argument)
 	scd4x_runtime_start_periodic_measurement(&scd41_config, &scd41_context);
 
 
-	  OneWire_Config  owCfg1;
-	  OneWire_Context owCtx1;
 
-	  owCfg1.huart      = &huart1;
-	  owCfg1.maxDevices = 5U;
 
-	  Ds18b20Api_Init(&owCfg1, &owCtx1);
 
 	uint32_t scd41_last_tick = osKernelGetTickCount();
-	uint32_t ds18b20_last_tick = osKernelGetTickCount();
+
   /* Infinite loop */
   for(;;)
   {
@@ -479,13 +485,6 @@ void StartTaskInput(void *argument)
 					   QueueSCD41Handle,
 					   scd4x_runtime_default_itm_event_handler);
 
-	  }
-
-	  if((osKernelGetTickCount() - ds18b20_last_tick) > 5000u){
-		  ds18b20_last_tick = osKernelGetTickCount();
-		  Ds18b20Api_Service(&owCfg1, &owCtx1,
-				  	  	  	 QueueDS18B20Handle,
-	                         Ds18b20Api_DefaultOnWireFault);
 	  }
 	  ramduinput = uxTaskGetStackHighWaterMark(NULL);
 	  osDelay(2);
@@ -583,6 +582,36 @@ void StartTaskLCD(void *argument)
 
   }
   /* USER CODE END StartTaskLCD */
+}
+
+/* USER CODE BEGIN Header_StartTaskDS18B20 */
+/**
+* @brief Function implementing the TaskDS18B20 thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartTaskDS18B20 */
+void StartTaskDS18B20(void *argument)
+{
+  /* USER CODE BEGIN StartTaskDS18B20 */
+	  OneWire_Config  owCfg1;
+	  OneWire_Context owCtx1;
+
+	  owCfg1.huart      = &huart1;
+	  owCfg1.maxDevices = 5U;
+
+	  Ds18b20Api_Init(&owCfg1, &owCtx1);
+
+  /* Infinite loop */
+  for(;;)
+  {
+	Ds18b20Api_Service(&owCfg1, &owCtx1,
+			  	  	  QueueDS18B20Handle,
+                      Ds18b20Api_DefaultOnWireFault);
+	ramduds18b20 = uxTaskGetStackHighWaterMark(NULL);
+    osDelay(5000);
+  }
+  /* USER CODE END StartTaskDS18B20 */
 }
 
 /**
