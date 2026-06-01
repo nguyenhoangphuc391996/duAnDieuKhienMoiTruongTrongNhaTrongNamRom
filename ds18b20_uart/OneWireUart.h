@@ -68,11 +68,19 @@ typedef struct {
   uint8_t temp_lsb;
 } Scratchpad_DS18S20;//
 
+/**
+ * @brief Callback để thông báo tiến trình học vị trí từng cảm biến.
+ * @param pos   Vị trí đang học (1-based).
+ * @param found 0 = đang yêu cầu người dùng hơ nóng, 1 = đã tìm thấy vị trí này.
+ */
+typedef void (*owLearnProgressCb)(uint8_t pos, uint8_t found);
+
 typedef struct {
   UART_HandleTypeDef *huart;
   uint8_t maxDevices;
   uint32_t baudData;
   uint32_t baudReset;
+  owLearnProgressCb learnCb; /**< Callback tiến trình học vị trí (có thể NULL) */
 } OneWire_Config;
 
 typedef struct {

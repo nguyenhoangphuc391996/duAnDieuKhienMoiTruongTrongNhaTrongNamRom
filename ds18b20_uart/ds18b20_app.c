@@ -1,6 +1,58 @@
 #include "ds18b20_app.h"
-
+#include "app_menu.h"
 #include "itm.h"
+
+/* =========================================================================
+ * Learn-progress binding (kết nối tiến trình học vị trí với menu context)
+ * ========================================================================= */
+
+static app_menu_ctx_t *s_menu_ctx = NULL;
+
+static void Ds18b20_LearnProgressCb(uint8_t pos, uint8_t found)
+{
+  if (s_menu_ctx != NULL)
+  {
+    s_menu_ctx->relearn_current_pos = pos;
+    s_menu_ctx->relearn_pos_found   = found;
+  }
+}
+
+/**
+ * @brief Liên kết menu context với bus OneWire để tự động cập nhật tiến trình học vị trí.
+ * @note  Gọi một lần sau Ds18b20Api_Init, trước khi bắt đầu học vị trí.
+ */
+void Ds18b20Api_BindMenuCtx(OneWire_Config *cfg, void *menu_ctx)
+{
+  s_menu_ctx = (app_menu_ctx_t *)menu_ctx;
+  if (cfg != NULL)
+  {
+    cfg->learnCb = Ds18b20_LearnProgressCb;
+  }
+}
+
+/**
+ * @brief Fault callback tích hợp: in ITM + đánh dấu lỗi vào menu context để LCD hiển thị.
+ */
+static void Ds18b20_FaultCb(uint8_t sensorIndex, int16_t tempDeciC)
+{
+  /* In ra ITM như bình thường */
+  Ds18b20Api_DefaultOnWireFault(sensorIndex, tempDeciC);
+
+  /* Đánh dấu lỗi trong menu context để LCD hiển thị cảnh báo */
+  if (s_menu_ctx != NULL && sensorIndex >= 1U)
+  {
+    uint8_t idx = (uint8_t)(sensorIndex - 1U);
+    if (idx < MENU_DS18B20_MAX)
+    {
+      s_menu_ctx->ds18b20_fault_mask |= (uint8_t)(1U << idx);
+    }
+  }
+}
+
+Ds18b20FaultCallback Ds18b20Api_GetFaultCb(void)
+{
+  return Ds18b20_FaultCb;
+}
 
 void Ds18b20Api_DefaultOnWireFault(uint8_t sensorIndex, int16_t tempDeciC)
 {

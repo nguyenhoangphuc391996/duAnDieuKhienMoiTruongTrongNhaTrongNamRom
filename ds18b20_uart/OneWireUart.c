@@ -424,6 +424,12 @@ HAL_StatusTypeDef owInitSensorPositions(OneWire_Config *cfg, OneWire_Context *ct
     itm_put_int((int)(pos + 1U));
     itm_print("\r\n");
 
+    /* Thông báo cho LCD: đang yêu cầu người dùng hơ nóng vị trí này */
+    if (cfg->learnCb != NULL)
+    {
+      cfg->learnCb((uint8_t)(pos + 1U), 0U);
+    }
+
     while (elapsed < ONEWIRE_HEAT_TIMEOUT_MS) {
       float bestDelta = -1000.0f;
       float secondDelta = -1000.0f;
@@ -487,6 +493,13 @@ HAL_StatusTypeDef owInitSensorPositions(OneWire_Config *cfg, OneWire_Context *ct
     itm_print(" mapped to ROM ");
     owItmPrintRom(&ctx->positionRom[pos]);
     itm_print("\r\n");
+
+    /* Thông báo cho LCD: đã tìm thấy vị trí này */
+    if (cfg->learnCb != NULL)
+    {
+      cfg->learnCb((uint8_t)(pos + 1U), 1U);
+    }
+
     osDelay(1000U);
   }
 

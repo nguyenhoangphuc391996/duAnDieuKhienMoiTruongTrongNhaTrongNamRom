@@ -54,7 +54,9 @@ typedef enum
     SCREEN_MINMAX_PARAM,   /**< Chọn thông số (Nhiệt độ/Độ ẩm/CO2/Đèn)     */
     SCREEN_MINMAX_FIELD,   /**< Chọn trường (Min/Max hoặc Start/Stop)       */
     SCREEN_MINMAX_EDIT,    /**< Chỉnh sửa giá trị MinMax                    */
-    SCREEN_DS18B20_POS,    /**< Cài đặt vị trí DS18B20                      */
+    SCREEN_DS18B20_POS,    /**< Sub-menu vị trí DS18B20                     */
+    SCREEN_DS18B20_COUNT,  /**< Chọn số cảm biến DS18B20                    */
+    SCREEN_DS18B20_LEARN,  /**< Học vị trí DS18B20 (hiển thị tiến trình)    */
     SCREEN_COUNT
 } app_screen_t;
 
@@ -78,6 +80,15 @@ typedef enum
     PARAM_DEN,
     PARAM_COUNT
 } minmax_param_t;
+
+/* =========================================================================
+ * DS18B20 learn phase constants
+ * ========================================================================= */
+
+#define DS18B20_LEARN_IDLE       0U  /**< Không trong quá trình học          */
+#define DS18B20_LEARN_SEARCHING  1U  /**< Đang tìm / học vị trí              */
+#define DS18B20_LEARN_DONE       2U  /**< Học xong, đã lưu Flash             */
+#define DS18B20_LEARN_ERROR      3U  /**< Hết thời gian, không tìm thấy đủ CB*/
 
 /* =========================================================================
  * Settings structures
@@ -151,6 +162,7 @@ typedef struct
     scd41_queue_item_t scd41;
     Ds18b20QueueItem   ds18b20[MENU_DS18B20_MAX];
     uint8_t            ds18b20_count;
+    uint8_t            ds18b20_fault_mask; /**< bit i = cảm biến i+1 bị lỗi dây */
 
     /* --- Settings --- */
     app_mode_t      active_mode;
@@ -165,6 +177,14 @@ typedef struct
     uint8_t edit_field_index;  /**< Index trường đang sửa (time field / min-max field) */
     uint8_t edit_mode_index;   /**< Index chế độ đang cài MinMax             */
     uint8_t edit_param_index;  /**< Index thông số đang cài MinMax           */
+
+    /* --- DS18B20 position learning (shared với TaskDS18B20, truy cập atomic) --- */
+    uint8_t          ds18b20_target_count;   /**< Số CB mong muốn (1-MENU_DS18B20_MAX) */
+    volatile uint8_t relearn_req;            /**< 1 = TaskDS18B20 cần thực hiện học lại */
+    volatile uint8_t relearn_phase;          /**< DS18B20_LEARN_* constants             */
+    volatile uint8_t relearn_retry_count;    /**< Số lần thử (timeout detection)        */
+    volatile uint8_t relearn_current_pos;    /**< Vị trí đang học (1-based); 0=warmup   */
+    volatile uint8_t relearn_pos_found;      /**< 0=đang hỏi người dùng, 1=đã tìm thấy */
 
 } app_menu_ctx_t;
 

@@ -613,7 +613,6 @@ void StartTaskUI(void *argument)
   /* USER CODE BEGIN StartTaskUI */
 	rtrecd_queue_item_t ev;
 	scd41_queue_item_t scd41_data;
-	Ds18b20QueueItem ds18b20_data;
 
 	bool got_event;
 
@@ -654,18 +653,6 @@ void StartTaskUI(void *argument)
 
 		  osMutexAcquire(MutexMenuHandle, osWaitForever);
 		  app_menu_update_scd41(&g_menu_ctx, &scd41_data);
-		  osMutexRelease(MutexMenuHandle);
-
-		  got_event = true;
-	  }
-
-	  /* DS18B20 data -> menu sensor update + ITM log */
-	  if (osMessageQueueGet(QueueDS18B20Handle, &ds18b20_data, NULL, 0U) == osOK)
-	  {
-		  Ds18b20Api_PrintItem(&ds18b20_data);
-
-		  osMutexAcquire(MutexMenuHandle, osWaitForever);
-		  app_menu_update_ds18b20(&g_menu_ctx, &ds18b20_data);
 		  osMutexRelease(MutexMenuHandle);
 
 		  got_event = true;
@@ -748,15 +735,65 @@ void StartTaskDS18B20(void *argument)
 	  owCfg1.maxDevices = 5U;
 
 	  Ds18b20Api_Init(&owCfg1, &owCtx1);
+	  Ds18b20Api_BindMenuCtx(&owCfg1, &g_menu_ctx);
 
   /* Infinite loop */
   for(;;)
   {
-	Ds18b20Api_Service(&owCfg1, &owCtx1,
+	  /* ---- Xử lý yêu cầu học lại vị trí từ menu ---- */
+	  if (g_menu_ctx.relearn_req)
+	  {
+		  /* Cập nhật số cảm biến theo cài đặt người dùng */
+		  uint8_t target = g_menu_ctx.ds18b20_target_count;
+		  if (target < 1U) target = 1U;
+		  if (target > (uint8_t)MENU_DS18B20_MAX) target = (uint8_t)MENU_DS18B20_MAX;
+		  owCfg1.maxDevices = target;
+
+		  Ds18b20Api_RequestRelearn(&owCfg1, &owCtx1);
+
+		  g_menu_ctx.relearn_req         = 0U;
+		  g_menu_ctx.relearn_retry_count = 0U;
+		  g_menu_ctx.relearn_phase       = DS18B20_LEARN_SEARCHING;
+	  }
+
+	  /* ---- Service bình thường ---- */
+	  HAL_StatusTypeDef res = Ds18b20Api_Service(&owCfg1, &owCtx1,
 			  	  	  QueueDS18B20Handle,
-                      Ds18b20Api_DefaultOnWireFault);
-	ramduds18b20 = uxTaskGetStackHighWaterMark(NULL);
-    osDelay(5000);
+                      Ds18b20Api_GetFaultCb());
+
+	  /* ---- Đọc kết quả từ queue và cập nhật menu ---- */
+	  {
+		  Ds18b20QueueItem ds18b20_data;
+		  while (osMessageQueueGet(QueueDS18B20Handle, &ds18b20_data, NULL, 0U) == osOK)
+		  {
+			  Ds18b20Api_PrintItem(&ds18b20_data);
+			  osMutexAcquire(MutexMenuHandle, osWaitForever);
+			  app_menu_update_ds18b20(&g_menu_ctx, &ds18b20_data);
+			  osMutexRelease(MutexMenuHandle);
+		  }
+	  }
+
+	  /* ---- Cập nhật kết quả học vị trí ---- */
+	  if (g_menu_ctx.relearn_phase == DS18B20_LEARN_SEARCHING)
+	  {
+		  if (res == HAL_OK)
+		  {
+			  /* Service OK = EnsureReady thành công + đọc nhiệt độ OK */
+			  g_menu_ctx.relearn_phase = DS18B20_LEARN_DONE;
+		  }
+		  else
+		  {
+			  g_menu_ctx.relearn_retry_count++;
+			  /* Timeout ~60s: 12 lần × 5s */
+			  if (g_menu_ctx.relearn_retry_count > 12U)
+			  {
+				  g_menu_ctx.relearn_phase = DS18B20_LEARN_ERROR;
+			  }
+		  }
+	  }
+
+	  ramduds18b20 = uxTaskGetStackHighWaterMark(NULL);
+      osDelay(5000);
   }
   /* USER CODE END StartTaskDS18B20 */
 }

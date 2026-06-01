@@ -11,6 +11,57 @@
 #include <stdio.h>
 
 /* =========================================================================
+ * LCD line helper: tự động pad (nếu < 16) hoặc scroll (nếu > 16)
+ * Gọi mỗi 50ms từ TaskLCD → tốc độ scroll ~300ms/bước
+ * ========================================================================= */
+
+static uint8_t s_scroll_tick = 0U;
+
+/**
+ * @brief Gửi 1 dòng ra LCD (16 ký tự).
+ *        - Chuỗi <= 16 ký tự: tự động pad khoảng trắng ở cuối.
+ *        - Chuỗi > 16 ký tự: cuộn từ phải sang trái (~300 ms/bước).
+ */
+static void lcd_send_line(const char *str)
+{
+    char buf[17];
+    uint8_t len = (uint8_t)strlen(str);
+
+    if (len <= 16U)
+    {
+        memcpy(buf, str, len);
+        memset(buf + len, ' ', 16U - len);
+        buf[16] = '\0';
+    }
+    else
+    {
+        /* Cuộn: cứ 6 tick (6 × 50ms = 300ms) mới dịch 1 ký tự */
+        uint8_t gap    = 4U;                         /* khoảng trắng giữa 2 vòng lặp */
+        uint8_t cycle  = (uint8_t)(len + gap);       /* độ dài 1 chu kỳ cuộn          */
+        uint8_t pos    = (uint8_t)((s_scroll_tick / 6U) % cycle);
+        /* Xây chuỗi mở rộng: str + "    " + 16 ký tự đầu của str (đủ để wrap) */
+        char ext[64];
+        if (len + gap + 16U < sizeof(ext))
+        {
+            memcpy(ext, str, len);
+            memset(ext + len, ' ', gap);
+            memcpy(ext + len + gap, str, 16U);
+            ext[len + gap + 16U] = '\0';
+        }
+        else
+        {
+            /* chuỗi quá dài, cắt thẳng */
+            memcpy(ext, str, sizeof(ext) - 1U);
+            ext[sizeof(ext) - 1U] = '\0';
+        }
+        memcpy(buf, ext + pos, 16U);
+        buf[16] = '\0';
+    }
+
+    lcd_send_string(buf);
+}
+
+/* =========================================================================
  * String tables
  * ========================================================================= */
 
@@ -178,34 +229,27 @@ static void edit_ccw(app_menu_ctx_t *ctx)
  * ========================================================================= */
 
 /**
- * @brief Hiển thị danh sách 2 dòng với con trỏ '>' .
+ * @brief Hiển thị menu kiểu: Dòng 0 = tiêu đề, Dòng 1 = item đang chọn.
  *
- * Mỗi lần hiển thị 2 item (tương ứng 2 dòng LCD 16x2).
- * scroll xác định item đầu tiên được hiển thị.
+ * Khi xoay encoder, cursor thay đổi → dòng 1 cập nhật sang item mới.
  */
-static void render_list_2row(const char * const items[],
-                              uint8_t count,
-                              uint8_t cursor,
-                              uint8_t scroll)
+static void render_title_item(const char *title,
+                               const char * const items[],
+                               uint8_t cursor)
 {
-    char line[32];
-    for (uint8_t row = 0U; row < 2U; row++)
-    {
-        uint8_t idx = scroll + row;
-        lcd_put_cur(row, 0);
-        if (idx < count)
-        {
-            snprintf(line, sizeof(line), "%c%-15s",
-                     (cursor == idx) ? '>' : ' ',
-                     items[idx]);
-        }
-        else
-        {
-            snprintf(line, sizeof(line), "%-16s", " ");
-        }
-        line[16] = '\0';
-        lcd_send_string(line);
-    }
+    char line[17];
+
+    /* Dòng 0: tiêu đề cố định */
+    snprintf(line, sizeof(line), "%-16s", title);
+    line[16] = '\0';
+    lcd_put_cur(0, 0);
+    lcd_send_string(line);
+
+    /* Dòng 1: '>' + item hiện tại (theo cursor) */
+    snprintf(line, sizeof(line), ">%-15s", items[cursor]);
+    line[16] = '\0';
+    lcd_put_cur(1, 0);
+    lcd_send_string(line);
 }
 
 /**
@@ -262,41 +306,77 @@ static void render_work1(app_menu_ctx_t *ctx)
     lcd_send_string(line);
 
     /* ---- Dòng 1: T[avg°C] A[%RH] C[ppm] ----
-     * Ví dụ: "T30 A90 C4000   "  (16 chars)
-     * Nhiệt độ: trung bình các cảm biến DS18B20 (nguyên °C)
-     * Độ ẩm   : SCD41 humidity_m_percent_rh / 1000
-     * CO2     : SCD41 co2 (ppm)
+     * Nhiệt độ: trung bình các cảm biến đã học vị trí (0..target_count-1),
+     *           chỉ tính những sensor đã có dữ liệu (tick != 0).
      */
-    int32_t avg_t = 0;
-    if (ctx->ds18b20_count > 0U)
+    int32_t avg_t   = 0;
+    uint8_t avg_cnt = 0U;
+    uint8_t target  = ctx->ds18b20_target_count;
+    if (target == 0U) target = ctx->ds18b20_count;   /* fallback nếu chưa cài */
+
+    for (uint8_t i = 0U; i < target && i < MENU_DS18B20_MAX; i++)
     {
-        for (uint8_t i = 0U; i < ctx->ds18b20_count; i++)
+        if (ctx->ds18b20[i].tick != 0U)
         {
             avg_t += (int32_t)ctx->ds18b20[i].tempDeciC;
+            avg_cnt++;
         }
-        avg_t /= (int32_t)ctx->ds18b20_count;
-        /* deciC -> °C, làm tròn: 235 -> 24, 234 -> 23, -235 -> -24 */
-        avg_t = round_div(avg_t, 10);
     }
-    /* m%RH -> %RH, làm tròn: 73500 -> 74, 73499 -> 73 */
+    if (avg_cnt > 0U)
+    {
+        avg_t = round_div(avg_t / (int32_t)avg_cnt, 10);
+    }
+    /* m%RH -> %RH, làm tròn */
     int32_t humi = round_div(ctx->scd41.humidity_m_percent_rh, 1000L);
 
-    snprintf(line, sizeof(line), "T%ld A%ld C%u       ",
-             avg_t, humi, ctx->scd41.co2);
-    line[16] = '\0';
     lcd_put_cur(1, 0);
-    lcd_send_string(line);
+
+    /* Nếu có lỗi cảm biến: luân phiên 1s hiển thị cảnh báo / 1s dữ liệu */
+    if (ctx->ds18b20_fault_mask != 0U && (s_scroll_tick / 20U) % 2U == 0U)
+    {
+        /* Xây chuỗi "LOI CB:N,M,..." — lcd_send_line tự scroll nếu dài */
+        char fault_str[32];
+        uint8_t pos = 0U;
+        pos += (uint8_t)snprintf(fault_str + pos, sizeof(fault_str) - pos, "!LOI CB:");
+        for (uint8_t i = 0U; i < MENU_DS18B20_MAX; i++)
+        {
+            if (ctx->ds18b20_fault_mask & (uint8_t)(1U << i))
+            {
+                pos += (uint8_t)snprintf(fault_str + pos, sizeof(fault_str) - pos, "%u,", (unsigned)(i + 1U));
+            }
+        }
+        /* Xóa dấu phẩy cuối */
+        if (pos > 0U && fault_str[pos - 1U] == ',') fault_str[pos - 1U] = '!';
+        lcd_send_line(fault_str);
+    }
+    else
+    {
+        snprintf(line, sizeof(line), "T%ld A%ld C%u", avg_t, humi, ctx->scd41.co2);
+        lcd_send_line(line);
+    }
 }
 
 static void render_work2(app_menu_ctx_t *ctx)
 {
     char line[32];
     char slot[3][8];
+    uint8_t target = ctx->ds18b20_target_count;
+    if (target == 0U) target = ctx->ds18b20_count;   /* fallback */
+    if (target > MENU_DS18B20_MAX) target = MENU_DS18B20_MAX;
 
-    /* ---- Dòng 0: vị trí 1, 2, 3  (cảm biến index 0,1,2) ---- */
+    /* ---- Dòng 0: vị trí 1, 2, 3 (index 0,1,2) ---- */
     for (uint8_t i = 0U; i < 3U; i++)
     {
-        if (i < ctx->ds18b20_count)
+        uint8_t fault = (ctx->ds18b20_fault_mask >> i) & 1U;
+        if (i >= target)
+        {
+            slot[i][0] = '\0';
+        }
+        else if (fault)
+        {
+            snprintf(slot[i], sizeof(slot[i]), "%u:ERR", (unsigned)(i + 1U));
+        }
+        else if (ctx->ds18b20[i].tick != 0U)
         {
             int16_t t = (int16_t)round_div((int32_t)ctx->ds18b20[i].tempDeciC, 10);
             snprintf(slot[i], sizeof(slot[i]), "%u:%d", (unsigned)(i + 1U), (int)t);
@@ -311,17 +391,27 @@ static void render_work2(app_menu_ctx_t *ctx)
     lcd_put_cur(0, 0);
     lcd_send_string(line);
 
-    /* ---- Dòng 1: vị trí 4, 5, 6  (cảm biến index 3,4,5) ---- */
+    /* ---- Dòng 1: vị trí 4, 5, 6 (index 3,4,5) — chỉ nếu target > 3 ---- */
     for (uint8_t i = 3U; i < 6U; i++)
     {
-        if (i < ctx->ds18b20_count)
+        uint8_t s     = (uint8_t)(i - 3U);
+        uint8_t fault = (ctx->ds18b20_fault_mask >> i) & 1U;
+        if (i >= target)
+        {
+            slot[s][0] = '\0';
+        }
+        else if (fault)
+        {
+            snprintf(slot[s], sizeof(slot[s]), "%u:ERR", (unsigned)(i + 1U));
+        }
+        else if (ctx->ds18b20[i].tick != 0U)
         {
             int16_t t = (int16_t)round_div((int32_t)ctx->ds18b20[i].tempDeciC, 10);
-            snprintf(slot[i - 3U], sizeof(slot[0]), "%u:%d", (unsigned)(i + 1U), (int)t);
+            snprintf(slot[s], sizeof(slot[s]), "%u:%d", (unsigned)(i + 1U), (int)t);
         }
         else
         {
-            snprintf(slot[i - 3U], sizeof(slot[0]), "%u:--", (unsigned)(i + 1U));
+            snprintf(slot[s], sizeof(slot[s]), "%u:--", (unsigned)(i + 1U));
         }
     }
     snprintf(line, sizeof(line), "%-5s%-5s%-6s", slot[0], slot[1], slot[2]);
@@ -399,20 +489,17 @@ static void render_work3(app_menu_ctx_t *ctx)
 
 static void render_main_menu(app_menu_ctx_t *ctx)
 {
-    render_list_2row(g_main_menu_items, MAIN_MENU_COUNT,
-                     ctx->cursor, ctx->scroll);
+    render_title_item("< Menu >", g_main_menu_items, ctx->cursor);
 }
 
 static void render_mode_select(app_menu_ctx_t *ctx)
 {
-    render_list_2row(g_mode_items, MODE_ITEM_COUNT,
-                     ctx->cursor, ctx->scroll);
+    render_title_item("Chon che do", g_mode_items, ctx->cursor);
 }
 
 static void render_time_menu(app_menu_ctx_t *ctx)
 {
-    render_list_2row(g_time_items, TIME_ITEM_COUNT,
-                     ctx->cursor, ctx->scroll);
+    render_title_item("Cai dat t/gian", g_time_items, ctx->cursor);
 }
 
 static void render_time_edit(app_menu_ctx_t *ctx)
@@ -425,25 +512,29 @@ static void render_time_edit(app_menu_ctx_t *ctx)
 
 static void render_minmax_mode(app_menu_ctx_t *ctx)
 {
-    render_list_2row(g_minmax_mode_items, MINMAX_MODE_COUNT,
-                     ctx->cursor, ctx->scroll);
+    render_title_item("Cai dat MinMax", g_minmax_mode_items, ctx->cursor);
 }
 
 static void render_minmax_param(app_menu_ctx_t *ctx)
 {
-    render_list_2row(g_minmax_param_items, get_mode_param_count(ctx),
-                     ctx->cursor, ctx->scroll);
+    /* Dòng 0: tên chế độ đang cài (ví dụ "Chay to") */
+    render_title_item(g_minmax_mode_items[ctx->edit_mode_index],
+                      g_minmax_param_items,
+                      ctx->cursor);
 }
 
 static void render_minmax_field(app_menu_ctx_t *ctx)
 {
+    /* Dòng 0: tên thông số đang cài (ví dụ "Nhiet do") */
     if (ctx->edit_param_index == (uint8_t)PARAM_DEN)
     {
-        render_list_2row(g_field_den, 2U, ctx->cursor, ctx->scroll);
+        render_title_item(g_minmax_param_items[ctx->edit_param_index],
+                          g_field_den, ctx->cursor);
     }
     else
     {
-        render_list_2row(g_field_minmax, 2U, ctx->cursor, ctx->scroll);
+        render_title_item(g_minmax_param_items[ctx->edit_param_index],
+                          g_field_minmax, ctx->cursor);
     }
 }
 
@@ -464,15 +555,78 @@ static void render_minmax_edit(app_menu_ctx_t *ctx)
     render_edit(field_name, ctx->edit_value, ctx->edit_min, ctx->edit_max);
 }
 
+static const char * const g_ds18b20_pos_items[] = {
+    "So cam bien",
+    "Hoc vi tri",
+};
+#define DS18B20_POS_ITEM_COUNT 2U
+
 static void render_ds18b20_pos(app_menu_ctx_t *ctx)
 {
-    char line[32];
-    lcd_put_cur(0, 0);
-    lcd_send_string("Vi tri DS18B20  ");
-    snprintf(line, sizeof(line), "So CB: %d       ", ctx->ds18b20_count);
-    line[16] = '\0';
-    lcd_put_cur(1, 0);
-    lcd_send_string(line);
+    render_title_item("Vi tri DS18B20", g_ds18b20_pos_items, ctx->cursor);
+}
+
+static void render_ds18b20_count(app_menu_ctx_t *ctx)
+{
+    render_edit("So cam bien", ctx->edit_value, ctx->edit_min, ctx->edit_max);
+}
+
+static void render_ds18b20_learn(app_menu_ctx_t *ctx)
+{
+    char tmp[32];   /* Buffer lớn hơn LCD để snprintf không cắt → hết warning */
+
+    s_scroll_tick++;  /* Tăng tick cuộn mỗi lần render (50ms) */
+
+    switch (ctx->relearn_phase)
+    {
+    case DS18B20_LEARN_SEARCHING:
+        if (ctx->relearn_current_pos == 0U)
+        {
+            lcd_put_cur(0, 0);
+            lcd_send_line("Hoc vi tri...");
+            lcd_put_cur(1, 0);
+            lcd_send_line("Chuan bi...");
+        }
+        else if (ctx->relearn_pos_found == 0U)
+        {
+            /* Đang yêu cầu người dùng hơ nóng vị trí N */
+            lcd_put_cur(0, 0);
+            lcd_send_line("Ho nong vi tri");
+            snprintf(tmp, sizeof(tmp), "so %u/%u",
+                     (unsigned)ctx->relearn_current_pos,
+                     (unsigned)ctx->ds18b20_target_count);
+            lcd_put_cur(1, 0);
+            lcd_send_line(tmp);
+        }
+        else
+        {
+            /* Vừa tìm thấy vị trí N */
+            snprintf(tmp, sizeof(tmp), "Tim thay so: %u",
+                     (unsigned)ctx->relearn_current_pos);
+            lcd_put_cur(0, 0);
+            lcd_send_line(tmp);
+            lcd_put_cur(1, 0);
+            lcd_send_line("Tiep theo...");
+        }
+        break;
+
+    case DS18B20_LEARN_DONE:
+        lcd_put_cur(0, 0);
+        lcd_send_line("Hoc xong!");
+        snprintf(tmp, sizeof(tmp), "Tim duoc %u CB",
+                 (unsigned)ctx->ds18b20_target_count);
+        lcd_put_cur(1, 0);
+        lcd_send_line(tmp);
+        break;
+
+    case DS18B20_LEARN_ERROR:
+    default:
+        lcd_put_cur(0, 0);
+        lcd_send_line("Khong du CB!");
+        lcd_put_cur(1, 0);
+        lcd_send_line("SW ngan=thoat");
+        break;
+    }
 }
 
 /* =========================================================================
@@ -867,10 +1021,84 @@ static void handle_minmax_edit(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 
 static void handle_ds18b20_pos(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
 {
-    /* TODO: logic cài đặt vị trí DS18B20 sẽ được thêm sau */
     switch (ev)
     {
+    case RTRECD_EVENT_ROTATE_CW:
+        list_cw(ctx, DS18B20_POS_ITEM_COUNT);
+        break;
+    case RTRECD_EVENT_ROTATE_CCW:
+        list_ccw(ctx);
+        break;
+    case RTRECD_EVENT_BUTTON_SHORT:
+        switch (ctx->cursor)
+        {
+        case 0U: /* So cam bien */
+            ctx->edit_value = (int32_t)ctx->ds18b20_target_count;
+            ctx->edit_min   = 1;
+            ctx->edit_max   = (int32_t)MENU_DS18B20_MAX;
+            nav_push(ctx, SCREEN_DS18B20_COUNT);
+            break;
+        case 1U: /* Hoc vi tri */
+            ctx->relearn_req         = 1U;
+            ctx->relearn_phase       = DS18B20_LEARN_SEARCHING;
+            ctx->relearn_retry_count = 0U;
+            ctx->relearn_current_pos = 0U;   /* reset: chưa hỏi vị trí nào */
+            ctx->relearn_pos_found   = 0U;
+            nav_push(ctx, SCREEN_DS18B20_LEARN);
+            break;
+        default:
+            break;
+        }
+        break;
     case RTRECD_EVENT_BUTTON_LONG:
+        nav_pop(ctx);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_ds18b20_count(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
+{
+    switch (ev)
+    {
+    case RTRECD_EVENT_ROTATE_CW:
+        edit_cw(ctx);
+        break;
+    case RTRECD_EVENT_ROTATE_CCW:
+        edit_ccw(ctx);
+        break;
+    case RTRECD_EVENT_BUTTON_SHORT:
+        /* Lưu số cảm biến và quay lại */
+        ctx->ds18b20_target_count = (uint8_t)ctx->edit_value;
+        nav_pop(ctx);
+        break;
+    case RTRECD_EVENT_BUTTON_LONG:
+        /* Huỷ, không lưu */
+        nav_pop(ctx);
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_ds18b20_learn(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
+{
+    switch (ev)
+    {
+    case RTRECD_EVENT_BUTTON_SHORT:
+        /* Chỉ cho thoát khi đã xong hoặc lỗi */
+        if (ctx->relearn_phase == DS18B20_LEARN_DONE ||
+            ctx->relearn_phase == DS18B20_LEARN_ERROR)
+        {
+            ctx->relearn_phase = DS18B20_LEARN_IDLE;
+            nav_pop(ctx);
+        }
+        break;
+    case RTRECD_EVENT_BUTTON_LONG:
+        /* Luôn cho phép thoát bằng nhấn dài */
+        ctx->relearn_phase = DS18B20_LEARN_IDLE;
+        ctx->relearn_req   = 0U;
         nav_pop(ctx);
         break;
     default:
@@ -899,6 +1127,9 @@ void app_menu_init(app_menu_ctx_t *ctx)
 
     /* Chế độ mặc định */
     ctx->active_mode = MODE_NGHI;
+
+    /* DS18B20: số cảm biến mặc định */
+    ctx->ds18b20_target_count = 5U;
 
     /* MinMax mặc định cho cả 4 chế độ */
     for (uint8_t i = 0U; i < 4U; i++)
@@ -937,13 +1168,25 @@ void app_menu_handle_event(app_menu_ctx_t *ctx, rtrecd_queue_item_t ev)
     case SCREEN_MINMAX_PARAM: handle_minmax_param(ctx, ev); break;
     case SCREEN_MINMAX_FIELD: handle_minmax_field(ctx, ev); break;
     case SCREEN_MINMAX_EDIT:  handle_minmax_edit(ctx, ev);  break;
-    case SCREEN_DS18B20_POS:  handle_ds18b20_pos(ctx, ev);  break;
+    case SCREEN_DS18B20_POS:    handle_ds18b20_pos(ctx, ev);    break;
+    case SCREEN_DS18B20_COUNT:  handle_ds18b20_count(ctx, ev); break;
+    case SCREEN_DS18B20_LEARN:  handle_ds18b20_learn(ctx, ev); break;
     default: break;
     }
 }
 
 void app_menu_render(app_menu_ctx_t *ctx)
 {
+    /*
+     * Màn hình học vị trí: luôn vẽ lại khi đang tìm kiếm (không dùng dirty)
+     * để TaskLCD liên tục cập nhật trạng thái từ TaskDS18B20.
+     */
+    if (ctx->screen == SCREEN_DS18B20_LEARN)
+    {
+        render_ds18b20_learn(ctx);
+        return;
+    }
+
     if (!ctx->dirty) return;
     ctx->dirty = false;
 
@@ -960,7 +1203,9 @@ void app_menu_render(app_menu_ctx_t *ctx)
     case SCREEN_MINMAX_PARAM: render_minmax_param(ctx); break;
     case SCREEN_MINMAX_FIELD: render_minmax_field(ctx); break;
     case SCREEN_MINMAX_EDIT:  render_minmax_edit(ctx);  break;
-    case SCREEN_DS18B20_POS:  render_ds18b20_pos(ctx);  break;
+    case SCREEN_DS18B20_POS:   render_ds18b20_pos(ctx);   break;
+    case SCREEN_DS18B20_COUNT: render_ds18b20_count(ctx); break;
+    case SCREEN_DS18B20_LEARN: render_ds18b20_learn(ctx); break;
     default: break;
     }
 }
@@ -977,15 +1222,20 @@ void app_menu_update_scd41(app_menu_ctx_t *ctx, const scd41_queue_item_t *data)
 
 void app_menu_update_ds18b20(app_menu_ctx_t *ctx, const Ds18b20QueueItem *data)
 {
-    uint8_t idx = data->sensorIndex;
-    if (idx < MENU_DS18B20_MAX)
+    /* sensorIndex từ library là 1-based (1..maxDevices).
+     * Chuyển sang 0-based để lưu vào mảng ds18b20[0..MENU_DS18B20_MAX-1]. */
+    if (data->sensorIndex == 0U) return;  /* không hợp lệ */
+    uint8_t idx = (uint8_t)(data->sensorIndex - 1U);
+    if (idx >= MENU_DS18B20_MAX) return;
+
+    ctx->ds18b20[idx] = *data;
+    /* Sensor gửi data tốt → xóa fault bit tương ứng */
+    ctx->ds18b20_fault_mask &= (uint8_t)~(uint8_t)(1U << idx);
+    if ((uint8_t)(idx + 1U) > ctx->ds18b20_count)
     {
-        ctx->ds18b20[idx] = *data;
-        if ((uint8_t)(idx + 1U) > ctx->ds18b20_count)
-        {
-            ctx->ds18b20_count = (uint8_t)(idx + 1U);
-        }
+        ctx->ds18b20_count = (uint8_t)(idx + 1U);
     }
+
     if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2
         || ctx->screen == SCREEN_WORK3)
     {
