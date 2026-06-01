@@ -507,6 +507,11 @@ int16_t scd4x_runtime_start_periodic_measurement(const scd41_config_t* config,
 
     scd4x_runtime_update_diag(config, context);
     if (context->error == NO_ERROR) {
+        /* Chỉ in START khi không đang trong trạng thái lỗi (init bình thường).
+         * Khi đang fault (retry hoặc recovery), nơi gọi sẽ tự in nếu cần. */
+        if (!context->fault_active) {
+            itm_print("[SCD41] START_PERIODIC_MEASUREMENT\r\n");
+        }
         context->consecutive_error_count = 0U;
     }
 
@@ -559,17 +564,21 @@ bool scd4x_runtime_poll(const scd41_config_t* config, scd41_context_t* context) 
     }
 
     fault_was_active = context->fault_active;
-    scd4x_runtime_fault_cause_t fault_cause_snapshot = context->fault_cause;
+//    scd4x_runtime_fault_cause_t fault_cause_snapshot = context->fault_cause;
     context->error = scd4x_runtime_read_if_ready(config, context);
     if (context->error == NO_ERROR) {
-        /* After a disconnect/power-loss fault (NOT CRC), force start command once bus is alive again.
-         * CRC errors must NOT trigger a restart: the sensor is still measuring normally.
-         * Sending START while sensor is in periodic mode causes a NACK → bus recovery →
-         * I2C peripheral DeInit/Init → further CRC errors on subsequent reads (feedback loop). */
-        if (fault_was_active && !context->data_ready &&
-            fault_cause_snapshot != SCD4X_RUNTIME_FAULT_CRC) {
+        /* After any fault (including CRC), force start command once bus is alive again
+         * and sensor is not yet producing data (data_ready=false).
+         * If the sensor was actually still running (transient CRC), it will NACK the START
+         * command, causing one extra fault cycle then recovering normally — acceptable.
+         * If we do NOT restart after CRC disconnect, the sensor stays idle forever. */
+        if (fault_was_active && !context->data_ready) {
             _measurement_running = false;
             (void)scd4x_runtime_start_periodic_measurement(config, context);
+            /* Print START chỉ khi lệnh thật sự thành công (sensor đã sống lại). */
+            if (context->error == NO_ERROR) {
+                itm_print("[SCD41] START_PERIODIC_MEASUREMENT\r\n");
+            }
             context->error = scd4x_runtime_read_if_ready(config, context);
         }
 
@@ -734,12 +743,6 @@ int16_t scd4x_start_periodic_measurement() {
     if (local_error != NO_ERROR) {
         return local_error;
     }
-
-    //in ra itmconsole----------------------------------------------------------------------------------------------------------------
-    itm_print("[SCD41] START_PERIODIC_MEASUREMENT");
-    itm_print("\r\n");
-    //--------------------------------------------------------------------------------------------------------------------------------
-
 
     _measurement_running = true;
     return local_error;

@@ -550,6 +550,24 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 }
 /* USER CODE END 4 */
 
+/* Flag báo trạng thái lỗi SCD41 — được set/clear từ TaskInput (event callback),
+ * đọc từ TaskUI. Trên Cortex-M, đọc/ghi byte là atomic → không cần mutex. */
+static volatile bool g_scd41_fault_active = false;
+
+/* Callback bọc ngoài: gọi ITM handler mặc định + cập nhật g_scd41_fault_active */
+static void prv_scd41_event_handler(const scd41_config_t* config,
+                                    const scd41_context_t* context,
+                                    scd4x_runtime_event_t event,
+                                    void* user_context)
+{
+    scd4x_runtime_default_itm_event_handler(config, context, event, user_context);
+    if (event == SCD4X_RUNTIME_EVENT_FAULT) {
+        g_scd41_fault_active = true;
+    } else if (event == SCD4X_RUNTIME_EVENT_RECOVERED) {
+        g_scd41_fault_active = false;
+    }
+}
+
 /* USER CODE BEGIN Header_StartTaskInput */
 /**
   * @brief  Function implementing the TaskInput thread.
@@ -591,7 +609,7 @@ void StartTaskInput(void *argument)
 	  Scd41Api_Service(&scd41_config,
 					   &scd41_context,
 					   QueueSCD41Handle,
-					   scd4x_runtime_default_itm_event_handler);
+					   prv_scd41_event_handler);
 
 	  }
 	  ramduinput = uxTaskGetStackHighWaterMark(NULL);
@@ -653,9 +671,19 @@ void StartTaskUI(void *argument)
 
 		  osMutexAcquire(MutexMenuHandle, osWaitForever);
 		  app_menu_update_scd41(&g_menu_ctx, &scd41_data);
+		  /* Khi nhận được data hợp lệ, xóa fault trên LCD */
+		  app_menu_set_scd41_fault(&g_menu_ctx, false);
 		  osMutexRelease(MutexMenuHandle);
 
 		  got_event = true;
+	  }
+
+	  /* Cập nhật trạng thái lỗi SCD41 lên LCD (set bởi prv_scd41_event_handler) */
+	  {
+		  bool fault = g_scd41_fault_active;
+		  osMutexAcquire(MutexMenuHandle, osWaitForever);
+		  app_menu_set_scd41_fault(&g_menu_ctx, fault);
+		  osMutexRelease(MutexMenuHandle);
 	  }
 
 	  /* Đọc RTC mỗi 1 giây -> cập nhật time_cfg và dirty LCD */
@@ -732,7 +760,7 @@ void StartTaskDS18B20(void *argument)
 	  OneWire_Context owCtx1;
 
 	  owCfg1.huart      = &huart1;
-	  owCfg1.maxDevices = 5U;
+	  owCfg1.maxDevices = 4U;   /* Tạm thời; vòng lặp đầu sẽ đồng bộ từ ds18b20_target_count */
 
 	  Ds18b20Api_Init(&owCfg1, &owCtx1);
 	  Ds18b20Api_BindMenuCtx(&owCfg1, &g_menu_ctx);
@@ -740,6 +768,12 @@ void StartTaskDS18B20(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	  /* ---- Đồng bộ số cảm biến từ settings (bao gồm sau khi load Flash) ---- */
+	  if (g_menu_ctx.ds18b20_target_count > 0U && !g_menu_ctx.relearn_req)
+	  {
+		  owCfg1.maxDevices = g_menu_ctx.ds18b20_target_count;
+	  }
+
 	  /* ---- Xử lý yêu cầu học lại vị trí từ menu ---- */
 	  if (g_menu_ctx.relearn_req)
 	  {
@@ -793,7 +827,7 @@ void StartTaskDS18B20(void *argument)
 	  }
 
 	  ramduds18b20 = uxTaskGetStackHighWaterMark(NULL);
-      osDelay(5000);
+      osDelay(2000);
   }
   /* USER CODE END StartTaskDS18B20 */
 }

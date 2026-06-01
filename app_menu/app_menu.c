@@ -306,8 +306,8 @@ static void render_work1(app_menu_ctx_t *ctx)
     lcd_send_string(line);
 
     /* ---- Dòng 1: T[avg°C] A[%RH] C[ppm] ----
-     * Nhiệt độ: trung bình các cảm biến đã học vị trí (0..target_count-1),
-     *           chỉ tính những sensor đã có dữ liệu (tick != 0).
+     * Nhiệt độ: trung bình các cảm biến hợp lệ (không lỗi, đã có data).
+     * Nếu tất cả đều lỗi → hiển thị "ERR" thay vì số.
      */
     int32_t avg_t   = 0;
     uint8_t avg_cnt = 0U;
@@ -316,44 +316,45 @@ static void render_work1(app_menu_ctx_t *ctx)
 
     for (uint8_t i = 0U; i < target && i < MENU_DS18B20_MAX; i++)
     {
-        if (ctx->ds18b20[i].tick != 0U)
-        {
-            avg_t += (int32_t)ctx->ds18b20[i].tempDeciC;
-            avg_cnt++;
-        }
+        /* Bỏ qua sensor có fault hoặc chưa có data */
+        if (ctx->ds18b20_fault_mask & (uint8_t)(1U << i)) continue;
+        if (ctx->ds18b20[i].tick == 0U) continue;
+        avg_t += (int32_t)ctx->ds18b20[i].tempDeciC;
+        avg_cnt++;
     }
     if (avg_cnt > 0U)
     {
         avg_t = round_div(avg_t / (int32_t)avg_cnt, 10);
     }
+
     /* m%RH -> %RH, làm tròn */
     int32_t humi = round_div(ctx->scd41.humidity_m_percent_rh, 1000L);
 
     lcd_put_cur(1, 0);
 
-    /* Nếu có lỗi cảm biến: luân phiên 1s hiển thị cảnh báo / 1s dữ liệu */
-    if (ctx->ds18b20_fault_mask != 0U && (s_scroll_tick / 20U) % 2U == 0U)
+    /* Hiển thị ERR cho từng nguồn lỗi:
+     *   TERR = DS18B20 lỗi   AERR = SCD41 lỗi (độ ẩm)   CERR = SCD41 lỗi (CO2)
+     * Kết hợp các trạng thái lỗi vào 1 dòng 16 ký tự. */
+    bool t_err = (ctx->ds18b20_fault_mask != 0U);
+    bool ac_err = ctx->scd41_fault;
+
+    if (t_err && ac_err)
     {
-        /* Xây chuỗi "LOI CB:N,M,..." — lcd_send_line tự scroll nếu dài */
-        char fault_str[32];
-        uint8_t pos = 0U;
-        pos += (uint8_t)snprintf(fault_str + pos, sizeof(fault_str) - pos, "!LOI CB:");
-        for (uint8_t i = 0U; i < MENU_DS18B20_MAX; i++)
-        {
-            if (ctx->ds18b20_fault_mask & (uint8_t)(1U << i))
-            {
-                pos += (uint8_t)snprintf(fault_str + pos, sizeof(fault_str) - pos, "%u,", (unsigned)(i + 1U));
-            }
-        }
-        /* Xóa dấu phẩy cuối */
-        if (pos > 0U && fault_str[pos - 1U] == ',') fault_str[pos - 1U] = '!';
-        lcd_send_line(fault_str);
+        snprintf(line, sizeof(line), "TERR AERR CERR");
+    }
+    else if (t_err)
+    {
+        snprintf(line, sizeof(line), "TERR A%ld C%u", humi, ctx->scd41.co2);
+    }
+    else if (ac_err)
+    {
+        snprintf(line, sizeof(line), "T%ld AERR CERR", avg_t);
     }
     else
     {
         snprintf(line, sizeof(line), "T%ld A%ld C%u", avg_t, humi, ctx->scd41.co2);
-        lcd_send_line(line);
     }
+    lcd_send_line(line);
 }
 
 static void render_work2(app_menu_ctx_t *ctx)
@@ -1129,7 +1130,7 @@ void app_menu_init(app_menu_ctx_t *ctx)
     ctx->active_mode = MODE_NGHI;
 
     /* DS18B20: số cảm biến mặc định */
-    ctx->ds18b20_target_count = 5U;
+    ctx->ds18b20_target_count = 4U;
 
     /* MinMax mặc định cho cả 4 chế độ */
     for (uint8_t i = 0U; i < 4U; i++)
@@ -1213,6 +1214,17 @@ void app_menu_render(app_menu_ctx_t *ctx)
 void app_menu_update_scd41(app_menu_ctx_t *ctx, const scd41_queue_item_t *data)
 {
     ctx->scd41 = *data;
+    if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2
+        || ctx->screen == SCREEN_WORK3)
+    {
+        ctx->dirty = true;
+    }
+}
+
+void app_menu_set_scd41_fault(app_menu_ctx_t *ctx, bool fault)
+{
+    if (ctx->scd41_fault == fault) return;
+    ctx->scd41_fault = fault;
     if (ctx->screen == SCREEN_WORK1 || ctx->screen == SCREEN_WORK2
         || ctx->screen == SCREEN_WORK3)
     {

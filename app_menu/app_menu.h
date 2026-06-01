@@ -160,6 +160,7 @@ typedef struct
 
     /* --- Sensor data (cập nhật từ TaskUI) --- */
     scd41_queue_item_t scd41;
+    bool               scd41_fault;  /**< true = SCD41 đang có lỗi (fault_active) */
     Ds18b20QueueItem   ds18b20[MENU_DS18B20_MAX];
     uint8_t            ds18b20_count;
     uint8_t            ds18b20_fault_mask; /**< bit i = cảm biến i+1 bị lỗi dây */
@@ -227,6 +228,12 @@ void app_menu_update_ds18b20(app_menu_ctx_t *ctx, const Ds18b20QueueItem *data);
  * @note  Gọi sau khi cập nhật sensor data.
  */
 void app_menu_mark_dirty(app_menu_ctx_t *ctx);
+
+/**
+ * @brief Cập nhật trạng thái lỗi SCD41 vào context.
+ * @note  Gọi từ TaskUI khi nhận được fault event từ SCD41.
+ */
+void app_menu_set_scd41_fault(app_menu_ctx_t *ctx, bool fault);
 
 /**
  * @brief Đọc thời gian từ RTC phần cứng và cập nhật vào ctx->time_cfg.
