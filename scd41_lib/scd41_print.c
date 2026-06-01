@@ -7,6 +7,12 @@
 #include "scd41_print.h"
 #include "itm.h"
 
+/* Route all itm_print/itm_put_int calls in this TU through ITM_LIB_SCD41 */
+#undef  itm_print
+#define itm_print(s)   itm_print_library(ITM_LIB_SCD41, (s))
+#undef  itm_put_int
+#define itm_put_int(n) itm_put_int_library(ITM_LIB_SCD41, (n))
+
 void scd41_print_signed_milli(int32_t value)
 {
   uint32_t abs_value;

@@ -157,6 +157,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+	itm_set_library_enabled(ITM_LIB_RTRECD, false);
+	itm_set_library_enabled(ITM_LIB_DS18B20, false);
+	itm_set_library_enabled(ITM_LIB_GLOBAL, false);
+	itm_set_library_enabled(ITM_LIB_SCD41, false);
 
   /* USER CODE END 1 */
 

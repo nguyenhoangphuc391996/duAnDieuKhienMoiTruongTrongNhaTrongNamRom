@@ -42,6 +42,12 @@
 #include "sensirion_i2c_hal.h"
 #include "itm.h"
 
+/* Route all itm_print/itm_put_int calls in this TU through ITM_LIB_SCD41 */
+#undef  itm_print
+#define itm_print(s)   itm_print_library(ITM_LIB_SCD41, (s))
+#undef  itm_put_int
+#define itm_put_int(n) itm_put_int_library(ITM_LIB_SCD41, (n))
+
 #define sensirion_hal_sleep_us sensirion_i2c_hal_sleep_usec
 
 #define ROUND(x) ((int32_t)((x) + 0.5))
