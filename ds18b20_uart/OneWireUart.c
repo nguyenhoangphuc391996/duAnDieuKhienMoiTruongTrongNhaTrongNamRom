@@ -5,6 +5,15 @@
 #include "stddef.h"
 #include "itm.h"
 
+/* For this translation unit map plain itm_print/itm_put_int calls to the
+ * DS18B20-specific library-aware variants so the runtime can enable/disable
+ * DS18B20 logging independently.
+ */
+#undef itm_print
+#undef itm_put_int
+#define itm_print(s) itm_print_library(ITM_LIB_DS18B20, (s))
+#define itm_put_int(n) itm_put_int_library(ITM_LIB_DS18B20, (n))
+
 #define ONEWIRE_POSMAP_MAGIC 0x504F5331UL
 #define ONEWIRE_POSMAP_VERSION 1U
 #define ONEWIRE_HEAT_DELTA_C 1.0f

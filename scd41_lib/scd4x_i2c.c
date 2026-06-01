@@ -231,41 +231,41 @@ static void scd4x_runtime_print_i2c_error_flags(uint32_t hal_error) {
     bool first = true;
 
     if (hal_error == HAL_I2C_ERROR_NONE) {
-        itm_print("NONE");
+        itm_print_library(ITM_LIB_SCD41, "NONE");
         return;
     }
 
     if ((hal_error & HAL_I2C_ERROR_BERR) != 0U) {
-        itm_print("BERR");
+        itm_print_library(ITM_LIB_SCD41, "BERR");
         first = false;
     }
     if ((hal_error & HAL_I2C_ERROR_ARLO) != 0U) {
-        itm_print(first ? "ARLO" : "|ARLO");
+        itm_print_library(ITM_LIB_SCD41, first ? "ARLO" : "|ARLO");
         first = false;
     }
     if ((hal_error & HAL_I2C_ERROR_AF) != 0U) {
-        itm_print(first ? "NACK(AF)" : "|NACK(AF)");
+        itm_print_library(ITM_LIB_SCD41, first ? "NACK(AF)" : "|NACK(AF)");
         first = false;
     }
     if ((hal_error & HAL_I2C_ERROR_OVR) != 0U) {
-        itm_print(first ? "OVR" : "|OVR");
+        itm_print_library(ITM_LIB_SCD41, first ? "OVR" : "|OVR");
         first = false;
     }
     if ((hal_error & HAL_I2C_ERROR_DMA) != 0U) {
-        itm_print(first ? "DMA" : "|DMA");
+        itm_print_library(ITM_LIB_SCD41, first ? "DMA" : "|DMA");
         first = false;
     }
     if ((hal_error & HAL_I2C_ERROR_TIMEOUT) != 0U) {
-        itm_print(first ? "TIMEOUT" : "|TIMEOUT");
+        itm_print_library(ITM_LIB_SCD41, first ? "TIMEOUT" : "|TIMEOUT");
         first = false;
     }
     if ((hal_error & HAL_I2C_ERROR_SIZE) != 0U) {
-        itm_print(first ? "SIZE" : "|SIZE");
+        itm_print_library(ITM_LIB_SCD41, first ? "SIZE" : "|SIZE");
         first = false;
     }
 
     if (first) {
-        itm_print("UNKNOWN_FLAGS");
+        itm_print_library(ITM_LIB_SCD41, "UNKNOWN_FLAGS");
     }
 }
 
@@ -370,39 +370,39 @@ void scd4x_runtime_default_itm_event_handler(const scd41_config_t* config,
             }
 
             if (g_scd4x_itm_short_log_enabled) {
-                itm_print("[SCD41][ERR] ");
-                itm_print(scd4x_runtime_bus_to_text(config));
-                itm_print(": ");
-                itm_print(scd4x_runtime_fault_simple_text(context->fault_cause));
-                itm_print(".\r\n");
+                itm_print_library(ITM_LIB_SCD41, "[SCD41][ERR] ");
+                itm_print_library(ITM_LIB_SCD41, scd4x_runtime_bus_to_text(config));
+                itm_print_library(ITM_LIB_SCD41, ": ");
+                itm_print_library(ITM_LIB_SCD41, scd4x_runtime_fault_simple_text(context->fault_cause));
+                itm_print_library(ITM_LIB_SCD41, ".\r\n");
                 break;
             }
 
-            itm_print("[SCD41][FAULT] cause=");
-            itm_print(scd4x_runtime_fault_cause_to_text(context->fault_cause));
-            itm_print("(");
-            itm_put_int((int)context->fault_cause);
-            itm_print(")");
-            itm_print(", err=");
-            itm_print(scd4x_runtime_error_to_text(context->error));
-            itm_print("(");
-            itm_put_int((int)context->error);
-            itm_print(")");
-            itm_print(", state=");
-            itm_print(scd4x_runtime_i2c_state_to_text(context->i2c_hal_state));
-            itm_print("(");
-            itm_put_int((int)context->i2c_hal_state);
-            itm_print(")");
-            itm_print(", hal_error=");
+            itm_print_library(ITM_LIB_SCD41, "[SCD41][FAULT] cause=");
+            itm_print_library(ITM_LIB_SCD41, scd4x_runtime_fault_cause_to_text(context->fault_cause));
+            itm_print_library(ITM_LIB_SCD41, "(");
+            itm_put_int_library(ITM_LIB_SCD41, (int)context->fault_cause);
+            itm_print_library(ITM_LIB_SCD41, ")");
+            itm_print_library(ITM_LIB_SCD41, ", err=");
+            itm_print_library(ITM_LIB_SCD41, scd4x_runtime_error_to_text(context->error));
+            itm_print_library(ITM_LIB_SCD41, "(");
+            itm_put_int_library(ITM_LIB_SCD41, (int)context->error);
+            itm_print_library(ITM_LIB_SCD41, ")");
+            itm_print_library(ITM_LIB_SCD41, ", state=");
+            itm_print_library(ITM_LIB_SCD41, scd4x_runtime_i2c_state_to_text(context->i2c_hal_state));
+            itm_print_library(ITM_LIB_SCD41, "(");
+            itm_put_int_library(ITM_LIB_SCD41, (int)context->i2c_hal_state);
+            itm_print_library(ITM_LIB_SCD41, ")");
+            itm_print_library(ITM_LIB_SCD41, ", hal_error=");
             scd4x_runtime_print_i2c_error_flags(context->i2c_hal_error);
-            itm_print("(");
-            itm_put_int((int)context->i2c_hal_error);
-            itm_print(")");
-            itm_print(", hint=");
-            itm_print(scd4x_runtime_fault_hint(context->fault_cause));
-            itm_print(", count=");
-            itm_put_int((int)g_scd4x_itm_fault_log_state.repeat_count);
-            itm_print("\r\n");
+            itm_print_library(ITM_LIB_SCD41, "(");
+            itm_put_int_library(ITM_LIB_SCD41, (int)context->i2c_hal_error);
+            itm_print_library(ITM_LIB_SCD41, ")");
+            itm_print_library(ITM_LIB_SCD41, ", hint=");
+            itm_print_library(ITM_LIB_SCD41, scd4x_runtime_fault_hint(context->fault_cause));
+            itm_print_library(ITM_LIB_SCD41, ", count=");
+            itm_put_int_library(ITM_LIB_SCD41, (int)g_scd4x_itm_fault_log_state.repeat_count);
+            itm_print_library(ITM_LIB_SCD41, "\r\n");
             break;
 
         case SCD4X_RUNTIME_EVENT_RECOVERED: {
@@ -410,23 +410,23 @@ void scd4x_runtime_default_itm_event_handler(const scd41_config_t* config,
             scd4x_runtime_fault_cause_t prev_cause = g_scd4x_itm_fault_log_state.cause;
             g_scd4x_itm_fault_log_state.has_active_fault = false;
             g_scd4x_itm_fault_log_state.repeat_count = 0U;
-            itm_print("[SCD41] ");
-            itm_print(scd4x_runtime_bus_to_text(config));
-            itm_print(": da ket noi lai sensor");
+            itm_print_library(ITM_LIB_SCD41, "[SCD41] ");
+            itm_print_library(ITM_LIB_SCD41, scd4x_runtime_bus_to_text(config));
+            itm_print_library(ITM_LIB_SCD41, ": da ket noi lai sensor");
             if (n > 1U) {
-                itm_print(" (sau ");
-                itm_put_int((int)n);
-                itm_print(" lan loi ");
-                itm_print(scd4x_runtime_fault_cause_to_text(prev_cause));
-                itm_print(")");
+                itm_print_library(ITM_LIB_SCD41, " (sau ");
+                itm_put_int_library(ITM_LIB_SCD41, (int)n);
+                itm_print_library(ITM_LIB_SCD41, " lan loi ");
+                itm_print_library(ITM_LIB_SCD41, scd4x_runtime_fault_cause_to_text(prev_cause));
+                itm_print_library(ITM_LIB_SCD41, ")");
             }
-            itm_print("\r\n");
+            itm_print_library(ITM_LIB_SCD41, "\r\n");
             break;
         }
 
         case SCD4X_RUNTIME_EVENT_RESTART_ATTEMPT:
             if (!g_scd4x_itm_short_log_enabled) {
-                itm_print("[SCD41] retry start periodic measurement\r\n");
+                itm_print_library(ITM_LIB_SCD41, "[SCD41] retry start periodic measurement\r\n");
             }
             break;
 
@@ -510,7 +510,7 @@ int16_t scd4x_runtime_start_periodic_measurement(const scd41_config_t* config,
         /* Chỉ in START khi không đang trong trạng thái lỗi (init bình thường).
          * Khi đang fault (retry hoặc recovery), nơi gọi sẽ tự in nếu cần. */
         if (!context->fault_active) {
-            itm_print("[SCD41] START_PERIODIC_MEASUREMENT\r\n");
+            itm_print_library(ITM_LIB_SCD41, "[SCD41] START_PERIODIC_MEASUREMENT\r\n");
         }
         context->consecutive_error_count = 0U;
     }
@@ -577,7 +577,7 @@ bool scd4x_runtime_poll(const scd41_config_t* config, scd41_context_t* context) 
             (void)scd4x_runtime_start_periodic_measurement(config, context);
             /* Print START chỉ khi lệnh thật sự thành công (sensor đã sống lại). */
             if (context->error == NO_ERROR) {
-                itm_print("[SCD41] START_PERIODIC_MEASUREMENT\r\n");
+                itm_print_library(ITM_LIB_SCD41, "[SCD41] START_PERIODIC_MEASUREMENT\r\n");
             }
             context->error = scd4x_runtime_read_if_ready(config, context);
         }

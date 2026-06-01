@@ -200,6 +200,14 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* MutexMenu đã được tạo bởi CubeMX ở trên */
+  /* Ví dụ: cấu hình trạng thái in ITM cho từng thư viện ở đây. Các giá trị
+   * này có thể được bật/tắt tùy ý để giảm nhiễu log khi debug nhiều module.
+   * Mặc định tất cả thư viện được bật ở impl. itm.c; dưới đây chỉ là ví dụ
+   * để tắt SCD41 và bật các thư viện khác. Bỏ comment để sử dụng. */
+   itm_set_library_enabled(ITM_LIB_SCD41, true);
+   itm_set_library_enabled(ITM_LIB_DS18B20, false);
+   itm_set_library_enabled(ITM_LIB_LCD, false);
+   itm_set_library_enabled(ITM_LIB_RTRECD, false);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -645,9 +653,9 @@ void StartTaskUI(void *argument)
 	  /* EC11 encoder -> menu navigation */
 	  if (osMessageQueueGet(QueueEC11Handle, &ev, NULL, 0U) == osOK)
 	  {
-		  itm_print("EC11: ");
-		  itm_print(rtrecd_queue_item_to_str(ev));
-		  itm_print("\r\n");
+          itm_print_library(ITM_LIB_RTRECD, "EC11: ");
+          itm_print_library(ITM_LIB_RTRECD, rtrecd_queue_item_to_str(ev));
+          itm_print_library(ITM_LIB_RTRECD, "\r\n");
 
 		  osMutexAcquire(MutexMenuHandle, osWaitForever);
 		  app_menu_handle_event(&g_menu_ctx, ev);
@@ -724,9 +732,9 @@ void StartTaskLCD(void *argument)
 	    .mutex = MutexI2C2Handle,
 	};
 
-    itm_print("[LCD] init...\r\n");
+    itm_print_library(ITM_LIB_LCD, "[LCD] init...\r\n");
     lcd_init(&lcd_cfg);
-    itm_print("[LCD] init OK\r\n");
+    itm_print_library(ITM_LIB_LCD, "[LCD] init OK\r\n");
 
     /* Khởi tạo menu sau khi LCD đã sẵn sàng */
     osMutexAcquire(MutexMenuHandle, osWaitForever);

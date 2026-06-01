@@ -63,12 +63,9 @@ static void rtrecd_update_rotation_from_isr(rtrecd_t *h)
 
 	steps_per_detent = (h->steps_per_detent == 0U) ? RTRECD_DEFAULT_STEPS_PER_DETENT : h->steps_per_detent;
 
-	/* Discard partial steps when direction flips to avoid reverse-direction lag. */
-	if (((h->step_acc > 0) && (step < 0)) || ((h->step_acc < 0) && (step > 0)))
-	{
-		h->step_acc = 0;
-	}
-
+	/* NOTE: Không reset step_acc khi đổi chiều — bounce +1/-1 sẽ tự bù về 0
+	 * theo đúng nguyên lý quadrature. Nếu reset, 1 bounce ngược sẽ "ăn" mất
+	 * toàn bộ progress và event tiếp theo cần thêm 1 bước nữa → gây khựng. */
 	h->step_acc += step;
 	while (h->step_acc >= (int8_t)steps_per_detent)
 	{
@@ -230,7 +227,6 @@ rtrecd_queue_item_t rtrecd_process(rtrecd_t *h)
 	uint32_t now_ms;
 	bool sw_active;
 	rtrecd_queue_item_t button_event;
-	uint32_t primask;
 	uint8_t has_cw;
 	uint8_t has_ccw;
 
@@ -247,9 +243,10 @@ rtrecd_queue_item_t rtrecd_process(rtrecd_t *h)
 		return out;
 	}
 
-	/* Atomically fetch one pending rotation event produced in ISR context. */
-	primask = __get_PRIMASK();
-	__disable_irq();
+	/* Atomically fetch one pending rotation event produced in ISR context.
+	 * Dùng taskENTER_CRITICAL thay vì __disable_irq() để an toàn với FreeRTOS
+	 * (không block SysTick và không ảnh hưởng đến scheduler). */
+	taskENTER_CRITICAL();
 	has_cw = h->rot_cw_pending;
 	has_ccw = h->rot_ccw_pending;
 	if (has_cw > 0U)
@@ -260,10 +257,7 @@ rtrecd_queue_item_t rtrecd_process(rtrecd_t *h)
 	{
 		h->rot_ccw_pending = (uint8_t)(has_ccw - 1U);
 	}
-	if (primask == 0U)
-	{
-		__enable_irq();
-	}
+	taskEXIT_CRITICAL();
 
 	if (has_cw > 0U)
 	{
@@ -318,9 +312,23 @@ rtrecd_queue_item_t rtrecd_process(rtrecd_t *h)
 		}
 	}
 
-	/* Prioritize button events so they are not masked by rotation in the same cycle. */
+	/* Button events có ưu tiên cao hơn rotation.
+	 * Nếu trong chu kỳ này vừa có rotation vừa có button, trả lại rotation
+	 * vào pending để lần gọi kế tiếp sẽ emit — tránh mất event. */
 	if (button_event != RTRECD_EVENT_NONE)
 	{
+		if (out == RTRECD_EVENT_ROTATE_CW)
+		{
+			taskENTER_CRITICAL();
+			h->rot_cw_pending++;
+			taskEXIT_CRITICAL();
+		}
+		else if (out == RTRECD_EVENT_ROTATE_CCW)
+		{
+			taskENTER_CRITICAL();
+			h->rot_ccw_pending++;
+			taskEXIT_CRITICAL();
+		}
 		out = button_event;
 	}
 
@@ -329,11 +337,20 @@ rtrecd_queue_item_t rtrecd_process(rtrecd_t *h)
 
 bool rtrecd_service(rtrecd_t *h, osMessageQueueId_t queue)
 {
-	rtrecd_queue_item_t event = rtrecd_process(h);
-	if (event != RTRECD_EVENT_NONE)
+	bool any_sent = false;
+	rtrecd_queue_item_t event;
+
+	/* Drain hết các pending events (CW/CCW/button) trong một lần gọi.
+	 * Giảm độ trễ khi xoay nhanh nhiều nấc liên tiếp. */
+	do
 	{
-		(void)osMessageQueuePut(queue, &event, 0U, 0U);
-		return true;
-	}
-	return false;
+		event = rtrecd_process(h);
+		if (event != RTRECD_EVENT_NONE)
+		{
+			(void)osMessageQueuePut(queue, &event, 0U, 0U);
+			any_sent = true;
+		}
+	} while (event != RTRECD_EVENT_NONE);
+
+	return any_sent;
 }
